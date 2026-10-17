@@ -59,6 +59,8 @@ Evidence to gather: use search_logs (full-text search, with a time window when o
 and their exact match counts; then investigate_event on a representative line for the surrounding events, recurrence and other
 problems from the same source. Add get_nearby_events with `minutes` for a time window, preceding_patterns to see which messages
 are unusually common just before the event, and template_history for the template's full spread. Quote key log lines verbatim.
+Read neighbours carefully: say whether they come from the same source as the failing line or from other sources, and treat
+a high lift backed by only a few lines in the window as weak evidence.
 Recommended action: one or two concrete diagnostic checks an engineer can run next (which node, file, service or config to
 inspect, and what result would confirm or rule out the hypothesis).""",
         "sections": """## What failed
@@ -70,7 +72,7 @@ inspect, and what result would confirm or rule out the hypothesis).""",
         "examples": [
             'What is behind the "Link has been severed" errors in BGL after September 2005?',
             "Investigate the data TLB error interrupts on BGL: what failed and what should I check?",
-            "Why does OpenStack log 'Unknown base file' warnings, and what happened around them?",
+            "What are the ERROR lines in OpenStack, which component logs them, and what happened just before?",
         ],
     },
     "team_lead": {

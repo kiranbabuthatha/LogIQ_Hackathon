@@ -198,10 +198,12 @@ def get_nearby_events(dataset: str, line_id: int, before: int = 5, after: int = 
     return ev.result({"lines": rows}, scope)
 
 
-def preceding_patterns(dataset: str, line_id: int, minutes: float = 30, limit: int = 10):
-    """Templates over-represented in the minutes before an event, compared with the whole dataset (lift)."""
-    limit = max(1, min(int(limit), 30))
-    ev = Evidence("preceding_patterns", dict(dataset=dataset, line_id=line_id, minutes=minutes, limit=limit))
+def preceding_patterns(dataset: str, line_id: int, minutes: float = 30, limit: int = 10, min_lines: int = 2):
+    """Templates over-represented in the minutes before an event, compared with the whole dataset (lift).
+    Templates seen fewer than `min_lines` times in the window are left out: lift from one line is not evidence."""
+    limit, min_lines = max(1, min(int(limit), 30)), max(1, int(min_lines))
+    ev = Evidence("preceding_patterns", dict(dataset=dataset, line_id=line_id, minutes=minutes, limit=limit,
+                                             min_lines=min_lines))
     _filters(dataset)
     t = ev.run("Target line", "SELECT ts, source, template_id FROM events_v WHERE dataset = %s AND line_id = %s",
                (dataset, line_id))
@@ -219,11 +221,11 @@ def preceding_patterns(dataset: str, line_id: int, minutes: float = 30, limit: i
         "sum(CASE WHEN w.source = %s THEN 1 ELSE 0 END) AS same_source_lines, max(w.severity) AS max_severity, "
         "b.dataset_lines, round((count(*) * 1.0 / t.win_n) / (b.dataset_lines * 1.0 / t.all_n), 1) AS lift "
         "FROM win w JOIN base b USING (template_id), tot t GROUP BY w.template_id, b.dataset_lines, t.win_n, t.all_n "
-        "ORDER BY lift DESC, lines_in_window DESC LIMIT %s",
-        (dataset, lo, ts, dataset, dataset, t[0]["source"], limit + 1), limit=limit)
+        "HAVING count(*) >= %s ORDER BY lift DESC, lines_in_window DESC LIMIT %s",
+        (dataset, lo, ts, dataset, dataset, t[0]["source"], min_lines, limit + 1), limit=limit)
     if not rows:
-        ev.notes.append(f"No log lines at all in the {minutes} minutes before this event, so there is nothing to compare; "
-                        "try a longer window.")
+        ev.notes.append(f"No template appears {min_lines}+ times in the {minutes} minutes before this event, so there is "
+                        "no over-represented pattern; try a longer window or min_lines=1.")
     ev.notes += ["lift = share of the window ÷ share of the whole dataset; lift > 1 means over-represented before the event.",
                  "This is co-occurrence in time, not proof of cause. Few lines in the window make lift unstable."]
     return ev.result({"target": {"line_id": line_id, **t[0]}, "window_start": f"{lo:%Y-%m-%d %H:%M:%S}", "patterns": rows},
@@ -558,7 +560,8 @@ TOOLS = {
         "properties": {"dataset": {**_DATASET, "description": "Dataset of the line."},
                        "line_id": {"type": "integer", "description": "line_id of the event."},
                        "minutes": {"type": "number", "description": "Window before the event in minutes (default 30)."},
-                       "limit": {"type": "integer", "description": "Maximum templates (1-30, default 10)."}},
+                       "limit": {"type": "integer", "description": "Maximum templates (1-30, default 10)."},
+                       "min_lines": {"type": "integer", "description": "Ignore templates seen fewer times than this in the window (default 2)."}},
         "required": ["dataset", "line_id"]}),
     "template_history": (template_history, {
         "description": "Whole-dataset history of one message template (template_id such as 'E29'): lines, first/last seen, active "
