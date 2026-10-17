@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LogIQ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5b6470; --line: #e2e5ea; --soft: #f0f2f5;
+  --accent: #2f5bd3; --accent-ink: #ffffff; --accent-soft: #e8eefc;
+  --warn: #8a5a00; --warn-soft: #fff4dc; --bad: #a32020; --bad-soft: #fde8e8; --ok: #1d6b3a; --ok-soft: #e3f4e8;
+  --code: #f3f4f7; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --panel: #191d23; --ink: #e6e9ee; --muted: #9aa3ae; --line: #2a3039; --soft: #20252d;
+    --accent: #7c9cf5; --accent-ink: #0d1117; --accent-soft: #1f2a44;
+    --warn: #f0c060; --warn-soft: #3a2f14; --bad: #f08a8a; --bad-soft: #3d1c1c; --ok: #7bd69a; --ok-soft: #183323; --code: #14181d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --panel: #191d23; --ink: #e6e9ee; --muted: #9aa3ae; --line: #2a3039; --soft: #20252d;
+  --accent: #7c9cf5; --accent-ink: #0d1117; --accent-soft: #1f2a44;
+  --warn: #f0c060; --warn-soft: #3a2f14; --bad: #f08a8a; --bad-soft: #3d1c1c; --ok: #7bd69a; --ok-soft: #183323; --code: #14181d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+.brand small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); letter-spacing: 0; }
+.corpus { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; min-width: 0; }
+.chip { display: inline-flex; gap: 6px; align-items: center; padding: 3px 10px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.chip b { color: var(--ink); font-weight: 600; }
+.pill { padding: 3px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); }
+nav { display: flex; gap: 4px; padding: 0 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
+nav button { border: 0; background: none; padding: 10px 14px; font: inherit; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+nav button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+main { padding: 20px 24px 40px; max-width: 1500px; margin: 0 auto; }
+.view { display: none; } .view.on { display: block; }
+.roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.role { text-align: left; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 12px 14px; cursor: pointer; font: inherit; color: inherit; }
+.role h3 { margin: 0 0 4px; font-size: 15px; } .role p { margin: 0; color: var(--muted); font-size: 13px; }
+.role.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; background: var(--accent-soft); }
+.examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.examples button { border: 1px dashed var(--line); background: var(--panel); color: var(--ink); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+.examples button:hover { border-color: var(--accent); }
+.ask { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 18px; }
+textarea, input, select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 100%; }
+textarea { resize: vertical; min-height: 64px; }
+.btn { border: 0; border-radius: 8px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: var(--accent-ink); white-space: nowrap; }
+.btn.ghost { background: var(--soft); color: var(--ink); font-weight: 500; }
+.btn:disabled { opacity: .55; cursor: default; }
+.split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+.panel > h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.evidence-panel { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+.turn + .turn { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.q { font-weight: 600; margin-bottom: 8px; } .q span { color: var(--muted); font-weight: 400; font-size: 12.5px; margin-left: 6px; }
+.status { color: var(--muted); font-size: 13.5px; display: flex; gap: 8px; align-items: center; }
+.spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.answer h2 { font-size: 16px; margin: 18px 0 6px; } .answer h2:first-child { margin-top: 4px; }
+.answer table { border-collapse: collapse; font-size: 13.5px; margin: 8px 0; display: block; overflow-x: auto; }
+.answer th, .answer td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.answer code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 12.5px; }
+.answer pre { background: var(--code); padding: 10px; border-radius: 8px; overflow-x: auto; }
+.eref { display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 5px; padding: 0 5px; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; }
+.usage { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.err { background: var(--bad-soft); color: var(--bad); border-radius: 8px; padding: 10px 12px; }
+.card { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+.card.flash { box-shadow: 0 0 0 2px var(--accent); }
+.card-h { display: flex; gap: 8px; align-items: center; padding: 9px 12px; background: var(--soft); flex-wrap: wrap; }
+.eid { font-weight: 700; color: var(--accent); } .tname { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.card-b { padding: 10px 12px; font-size: 13px; }
+.args { display: flex; flex-wrap: wrap; gap: 6px; }
+.args code { background: var(--code); padding: 1px 6px; border-radius: 4px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.answer, .q, .examples button, .note, .scope { overflow-wrap: break-word; }
+.scope { color: var(--muted); margin: 8px 0 6px; }
+.note { background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 5px 8px; margin: 5px 0; }
+.badge { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--soft); color: var(--muted); border: 1px solid var(--line); }
+.badge.trunc { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+details { margin: 6px 0; } summary { cursor: pointer; color: var(--muted); }
+details pre { background: var(--code); padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; margin: 6px 0; }
+.dtable { overflow-x: auto; margin: 6px 0; }
+.dtable table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.dtable th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 4px 6px; white-space: nowrap; }
+.dtable td { border-bottom: 1px solid var(--line); padding: 4px 6px; vertical-align: top; max-width: 420px; }
+.dtable tr.target td { background: var(--accent-soft); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 6px 0; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.sub { font-weight: 600; margin: 10px 0 2px; font-size: 12.5px; }
+.empty { color: var(--muted); font-size: 14px; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 14px; margin: 12px 0; }
+.form label { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.form label.check { flex-direction: row; align-items: center; gap: 8px; }
+.form label.check input { width: auto; }
+.tooldesc { color: var(--muted); font-size: 13.5px; margin: 8px 0 0; }
+.banner { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
+@media (max-width: 900px) {
+  header, nav, main { padding-left: 16px; padding-right: 16px; }
+  .chip { white-space: normal; }
+  .corpus { flex-basis: 100%; }
+  .roles { grid-template-columns: minmax(0, 1fr); }
+  nav { overflow-x: auto; }
+  nav button { white-space: nowrap; }
+  .roles { grid-template-columns: 1fr; }
+  .split { grid-template-columns: 1fr; }
+  .evidence-panel { position: static; max-height: none; }
+  .ask { flex-direction: column; align-items: stretch; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">LogIQ<small>The right log insights for the right people</small></div>
+  <div class="corpus" id="corpus"></div>
+  <span class="pill" id="agentPill">…</span>
+</header>
+<nav>
+  <button class="on" data-view="askView">Ask the agent</button>
+  <button data-view="exploreView">Explore tools</button>
+  <button data-view="corpusView">Corpus &amp; teams</button>
+</nav>
+<main>
+  <section class="view on" id="askView">
+    <div id="keyBanner"></div>
+    <div class="roles" id="roles"></div>
+    <div class="examples" id="examples"></div>
+    <div class="ask">
+      <textarea id="question" placeholder="Ask a question about the logs…"></textarea>
+      <button class="btn" id="askBtn">Ask</button>
+      <button class="btn ghost" id="newBtn" title="Start a new conversation">New</button>
+    </div>
+    <div class="split">
+      <div class="panel"><h2>Answer</h2><div id="thread"><p class="empty">Pick a role, then ask a question or choose an example. Answers cite evidence like <span class="eref">Q1</span>, which links to the query that produced it.</p></div></div>
+      <div class="panel evidence-panel"><h2>Evidence trail · tool calls and SQL</h2><div id="evidence"><p class="empty">Each tool call the agent makes appears here, with the exact query, filters, row counts and results.</p></div></div>
+    </div>
+  </section>
+
+  <section class="view" id="exploreView">
+    <div class="panel">
+      <h2>Run a tool directly</h2>
+      <p class="tooldesc">These are the same parameterised SereneDB queries the agent calls. No API key needed.</p>
+      <div class="form" style="grid-template-columns: minmax(200px, 360px)"><label>Tool<select id="toolSel"></select></label></div>
+      <p class="tooldesc" id="toolDesc"></p>
+      <div class="form" id="toolForm"></div>
+      <button class="btn" id="runBtn">Run</button>
+    </div>
+    <div style="margin-top:16px" id="exploreOut"></div>
+  </section>
+
+  <section class="view" id="corpusView"><div class="panel" id="corpusPanel"><p class="empty">Loading…</p></div></section>
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = n => typeof n === "number" ? n.toLocaleString() : n;
+let META = null, role = "engineer", sessionId = null, busy = false;
+try { role = localStorage.getItem("logiq.role") || role; } catch (e) {}
+
+// ---------- rendering evidence envelopes ----------
+function table(rows, opts = {}) {
+  if (!rows || !rows.length) return `<div class="empty">(no rows)</div>`;
+  const cols = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(c => !(opts.hide || []).includes(c));
+  return `<div class="dtable"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+    rows.map(r => `<tr class="${r.position === "target" ? "target" : ""}">${cols.map(c => `<td>${esc(typeof r[c] === "number" ? fmt(r[c]) : r[c])}</td>`).join("")}</tr>`).join("")
+  }</tbody></table></div>`;
+}
+function renderData(data) {
+  let html = "";
+  for (const [k, v] of Object.entries(data || {})) {
+    if (Array.isArray(v) && v.length && typeof v[0] === "object") html += `<div class="sub">${esc(k)} (${v.length})</div>` + table(v);
+    else if (Array.isArray(v)) html += `<div class="sub">${esc(k)}</div>` + (v.length ? `<ul>${v.map(x => `<li>${esc(typeof x === "object" ? JSON.stringify(x) : x)}</li>`).join("")}</ul>` : `<div class="empty">(none)</div>`);
+    else if (v && typeof v === "object") {
+      const nested = Object.values(v).some(x => x && typeof x === "object");
+      html += `<div class="sub">${esc(k)}</div>` + (nested ? table(Object.entries(v).map(([kk, vv]) => ({ key: kk, ...vv }))) :
+        `<div class="kv">${Object.entries(v).map(([kk, vv]) => `<div>${esc(kk)}</div><div>${esc(fmt(vv))}</div>`).join("")}</div>`);
+    } else html += `<div class="kv"><div>${esc(k)}</div><div><b>${esc(fmt(v))}</b></div></div>`;
+  }
+  return html;
+}
+function card(id, name, input) {
+  const el = document.createElement("div");
+  el.className = "card"; el.id = "card-" + id;
+  const args = Object.entries(input || {}).map(([k, v]) => `<code>${esc(k)}=${esc(JSON.stringify(v))}</code>`).join("") || `<span class="empty">no arguments</span>`;
+  el.innerHTML = `<div class="card-h"><span class="eid">${esc(id)}</span><span class="tname">${esc(name)}</span><span class="badge">running…</span></div>
+    <div class="card-b"><div class="args">${args}</div><div class="res"></div></div>`;
+  return el;
+}
+function fillCard(el, env, error) {
+  const badge = $(".badge", el), res = $(".res", el);
+  if (error) { badge.textContent = "error"; badge.className = "badge trunc"; res.innerHTML = `<div class="err">${esc(error)}</div>`; return; }
+  const truncated = env.queries.some(q => q.truncated);
+  badge.textContent = `${env.queries.length} quer${env.queries.length === 1 ? "y" : "ies"}${truncated ? " · truncated" : ""}`;
+  badge.className = "badge" + (truncated ? " trunc" : "");
+  res.innerHTML = `<div class="scope">Scope: ${esc(env.scope)}</div>
+    ${env.notes.map(n => `<div class="note">${esc(n)}</div>`).join("")}
+    ${env.queries.map((q, i) => `<details><summary>SQL ${i + 1}: ${esc(q.purpose)} · ${q.rows_returned} row${q.rows_returned === 1 ? "" : "s"}${q.truncated ? " (truncated)" : ""}</summary>
+      <pre>${esc(q.sql)}</pre><div class="args">params: ${q.params.length ? q.params.map(p => `<code>${esc(JSON.stringify(p))}</code>`).join("") : "none"}</div></details>`).join("")}
+    ${renderData(env.data)}`;
+}
+
+// ---------- ask the agent ----------
+function renderRoles() {
+  $("#roles").innerHTML = Object.entries(META.roles).map(([k, r]) =>
+    `<button class="role ${k === role ? "on" : ""}" data-role="${k}"><h3>${esc(r.label)}</h3><p>${esc(r.goal)}</p></button>`).join("");
+  $("#examples").innerHTML = META.roles[role].examples.map(q => `<button>${esc(q)}</button>`).join("");
+  document.querySelectorAll(".role").forEach(b => b.onclick = () => {
+    if (busy || b.dataset.role === role) return;
+    role = b.dataset.role; sessionId = null; try { localStorage.setItem("logiq.role", role); } catch (e) {}
+    resetThread(); renderRoles();
+  });
+  document.querySelectorAll("#examples button").forEach(b => b.onclick = () => { $("#question").value = b.textContent; ask(); });
+}
+function resetThread() {
+  $("#thread").innerHTML = `<p class="empty">New ${esc(META.roles[role].label.toLowerCase())} conversation. Ask a question or pick an example.</p>`;
+  $("#evidence").innerHTML = `<p class="empty">Tool calls will appear here.</p>`;
+}
+function linkRefs(html) {
+  // [Q3] or [Q3, Q5] -> clickable chips (template ids like E55 are left alone)
+  return html.replace(/\[(Q\d+(?:\s*,\s*Q\d+)*)\]/g, (m, ids) =>
+    ids.split(/\s*,\s*/).map(id => `<a class="eref" data-ref="${id}">${id}</a>`).join(" "));
+}
+function md(text) {
+  const raw = window.marked ? marked.parse(text) : `<pre>${esc(text)}</pre>`;
+  return linkRefs(window.DOMPurify ? DOMPurify.sanitize(raw) : raw);
+}
+async function ask() {
+  const question = $("#question").value.trim();
+  if (!question || busy) return;
+  busy = true; $("#askBtn").disabled = true;
+  const thread = $("#thread");
+  if (thread.querySelector(".empty")) thread.innerHTML = "";
+  if ($("#evidence .empty")) $("#evidence").innerHTML = "";
+  const turn = document.createElement("div");
+  turn.className = "turn";
+  turn.innerHTML = `<div class="q">${esc(question)}<span>${esc(META.roles[role].label)}</span></div><div class="status"><div class="spin"></div><span>Starting…</span></div><div class="answer"></div>`;
+  thread.appendChild(turn); turn.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("#question").value = "";
+  const status = $(".status span", turn), cards = {};
+  let toolCount = 0;
+  try {
+    const resp = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role, question, session_id: sessionId }) });
+    if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+    const reader = resp.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 2);
+        if (!line.startsWith("data: ")) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === "session") sessionId = ev.session_id;
+        else if (ev.type === "status") status.textContent = ev.text + (toolCount ? ` (${toolCount} tool call${toolCount > 1 ? "s" : ""} so far)` : "");
+        else if (ev.type === "tool_call") {
+          toolCount++; status.textContent = `Running ${ev.name}…`;
+          cards[ev.id] = card(ev.id, ev.name, ev.input); $("#evidence").appendChild(cards[ev.id]);
+        } else if (ev.type === "tool_result") fillCard(cards[ev.id], ev.envelope, ev.error);
+        else if (ev.type === "answer") { $(".answer", turn).innerHTML = md(ev.text); }
+        else if (ev.type === "error") { $(".answer", turn).innerHTML = `<div class="err">${esc(ev.text)}</div>`; }
+        else if (ev.type === "done") {
+          const u = ev.usage;
+          $(".answer", turn).insertAdjacentHTML("beforeend", `<div class="usage">${toolCount} tool call${toolCount === 1 ? "" : "s"} · ${u.model_calls} model call${u.model_calls === 1 ? "" : "s"} · ${fmt(u.input_tokens)} in / ${fmt(u.output_tokens)} out tokens · ${fmt(u.cache_read_input_tokens)} cached · ${esc(META.model)}</div>`);
+        }
+      }
+    }
+  } catch (e) {
+    $(".answer", turn).innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+  $(".status", turn).remove();
+  busy = false; $("#askBtn").disabled = false;
+}
+document.addEventListener("click", e => {
+  const ref = e.target.closest(".eref[data-ref]");
+  if (!ref) return;
+  const c = document.getElementById("card-" + ref.dataset.ref);
+  if (!c) return;
+  c.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  c.classList.add("flash"); setTimeout(() => c.classList.remove("flash"), 1400);
+});
+
+// ---------- explore tools ----------
+function renderToolForm() {
+  const t = META.tools.find(x => x.name === $("#toolSel").value);
+  $("#toolDesc").textContent = t.description;
+  $("#toolForm").innerHTML = Object.entries(t.properties).map(([k, p]) => {
+    const req = t.required.includes(k) ? " *" : "";
+    if (p.enum) return `<label>${esc(k)}${req}<select name="${k}"><option value="">(default)</option>${p.enum.map(v => `<option>${esc(v)}</option>`).join("")}</select></label>`;
+    if (p.type === "boolean") return `<label class="check"><input type="checkbox" name="${k}">${esc(k)}</label>`;
+    return `<label title="${esc(p.description)}">${esc(k)}${req}<input name="${k}" type="${p.type === "integer" ? "number" : "text"}" placeholder="${esc(p.description)}"></label>`;
+  }).join("") || `<p class="empty">This tool takes no arguments.</p>`;
+}
+async function runTool() {
+  const t = META.tools.find(x => x.name === $("#toolSel").value), args = {};
+  for (const [k, p] of Object.entries(t.properties)) {
+    const el = $(`[name="${k}"]`, $("#toolForm"));
+    if (p.type === "boolean") { if (el.checked) args[k] = true; }
+    else if (el.value !== "") args[k] = p.type === "integer" ? parseInt(el.value, 10) : el.value;
+  }
+  const out = $("#exploreOut"), c = card("Run", t.name, args);
+  out.prepend(c);
+  try {
+    const r = await fetch("/api/tool/" + t.name, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args) });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    fillCard(c, body);
+  } catch (e) { fillCard(c, null, e.message); }
+}
+
+// ---------- corpus ----------
+function renderCorpus() {
+  const d = META.corpus && META.corpus.data;
+  if (!d) {
+    $("#corpus").innerHTML = `<span class="pill bad">Database unreachable</span>`;
+    $("#corpusPanel").innerHTML = `<div class="err">Could not query SereneDB: ${esc(META.db_error)}. Check SERENEDB_DSN in .env.</div>`;
+    return;
+  }
+  $("#corpus").innerHTML = d.datasets.map(x => `<span class="chip"><b>${esc(x.dataset)}</b> ${fmt(x.lines)} lines · ${fmt(x.problem_lines)} problem · ${esc(x.first_ts.slice(0, 10))} → ${esc(x.last_ts.slice(0, 10))}</span>`).join("");
+  const c = document.createElement("div"); fillCard(c.appendChild(card("—", "corpus_overview", {})), META.corpus);
+  $("#corpusPanel").innerHTML = `<h2>Whole-corpus overview</h2><p class="tooldesc">Calculated in SereneDB over every loaded line (the <code>corpus_overview</code> tool).</p>`;
+  $("#corpusPanel").appendChild(c);
+}
+
+async function init() {
+  META = await (await fetch("/api/meta")).json();
+  if (!META.roles[role]) role = "engineer";
+  $("#agentPill").textContent = META.agent_ready ? `Agent ready · ${META.model}` : "Agent offline: not configured";
+  $("#agentPill").className = "pill " + (META.agent_ready ? "ok" : "bad");
+  if (!META.agent_ready) $("#keyBanner").innerHTML = `<div class="banner">To use the agent, ${esc(META.agent_setup)} and restart the server. The <b>Explore tools</b> tab works without it.</div>`;
+  renderRoles(); renderCorpus();
+  $("#toolSel").innerHTML = META.tools.map(t => `<option>${esc(t.name)}</option>`).join("");
+  $("#toolSel").onchange = renderToolForm; renderToolForm();
+  $("#askBtn").onclick = ask; $("#runBtn").onclick = runTool;
+  $("#newBtn").onclick = () => { if (!busy) { sessionId = null; resetThread(); } };
+  $("#question").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) ask(); });
+  document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+    document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+    document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === b.dataset.view));
+  });
+}
+init();
+</script>
+</body>
+</html>
