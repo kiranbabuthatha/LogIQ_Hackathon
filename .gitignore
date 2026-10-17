@@ -1,0 +1,7 @@
+# Allowlist: ignore everything except the files needed to run the project
+*
+!.gitignore
+!README.md
+!requirements.txt
+!.env.example
+!agent_tools.py
