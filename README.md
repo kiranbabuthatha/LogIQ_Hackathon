@@ -8,37 +8,49 @@ LogIQ turns system logs into answers for three people who read the same logs for
 | **Team lead** | "What keeps coming back?" | Recurring problems with counts, trends and owning teams, and what to investigate first |
 | **Manager** | "What should we prioritise?" | At most five ranked risks, each with an owner and an action, without invented business impact |
 
-The logs (BGL supercomputer and OpenStack cloud, from Loghub) are far too large to paste into an AI prompt. So
-**SereneDB does the searching and counting**, and an **AI agent chooses which queries to run and explains the results**.
-Every number in an answer links back to the SQL query that produced it.
+The logs are the full Loghub **BGL** supercomputer log (4,747,963 lines over 215 days) and **OpenStack** cloud log (207,820
+lines over 3 days), about 5 million lines in total, far too many to paste into an AI prompt. So **SereneDB does the searching
+and counting**, and an **AI agent chooses which queries to run and explains the results**. Every number in an answer links
+back to the SQL query that produced it.
 
 ---
 
 ## How it works
 
-LogIQ has two stages: data is **loaded once**, then **every question** goes through the same agent loop.
+LogIQ has two stages: data is **prepared and loaded once**, then **every question** goes through the same agent loop.
 
-### Stage 1: Load and index the logs (once)
+### Stage 1: Prepare, load and index the logs (once)
 
 ```
- Loghub structured CSVs          sql/schema.sql (run by load.py)                          ready to query
-┌──────────────────────┐        ┌───────────────────────────────────────────────┐        ┌──────────────────┐
-│ BGL.log_structured   │──read──▶ bgl, openstack      raw tables                  │        │ events_v         │
-│ OpenStack…structured │  _csv  │        │                                      │        │  every line +    │
-└──────────────────────┘        │        ▼  unify columns, add severity 0-3     │        │  team +          │
-                                │ events (dataset, ts, source, component,       │───────▶│  is_problem      │
- team-ownership table           │         level, severity, is_alert,            │        │                  │
-┌──────────────────────┐        │         template_id, content)                 │        │ events_idx       │
-│ ownership            │────────▶ component_team  (longest prefix → team)      │        │  full-text index │
-│ (component → team)   │        │ events_idx      (inverted index on content)   │        │  (BM25 ranking)  │
-└──────────────────────┘        └───────────────────────────────────────────────┘        └──────────────────┘
+ Zenodo archives            prepare_data.py              load.py + sql/schema.sql                       ready to query
+┌────────────────┐        ┌─────────────────────┐      ┌──────────────────────────────────────────┐   ┌────────────────┐
+│ BGL.zip        │download│ raw logs ─▶ parse   │ CSV  │ bgl, openstack   raw tables (COPY)       │   │ events_v       │
+│  BGL.log       │──────▶ │ fields, mask values │─────▶│      │  unify columns, severity 0-3      │   │  every line +  │
+│ OpenStack.tar  │extract │ ─▶ template + id    │      │      ▼                                   │──▶│  team +        │
+│  3 raw logs    │        │ data/*_structured   │      │ events  (5.0M lines, both datasets)      │   │  is_problem    │
+└────────────────┘        └─────────────────────┘      │ component_team  ownership → team         │   │ events_idx     │
+ ownership table ─────────────────────────────────────▶│ events_idx      full-text index (BM25)   │   │  full-text     │
+                                                       └──────────────────────────────────────────┘   └────────────────┘
 ```
 
-1. **Read** the raw CSVs straight into SereneDB with `read_csv` (from a URL or a server path).
-2. **Unify** both datasets into one `events` table with shared columns, and map each level to a **severity** (3 = FATAL/SEVERE, 2 = ERROR, 1 = WARNING, 0 = INFO).
-3. **Attach owners.** The `component_team` view gives every component an owning team from the `ownership` table, by longest matching prefix (for example `nova.compute.manager` → `compute-core`).
-4. **Mark problems.** The `events_v` view adds `team` and `is_problem` (severity ≥ WARNING, or a BGL expert alert label).
-5. **Index the text.** `events_idx` is an inverted full-text index over the log message, lower-cased, normalised and stemmed, so searches use `@@` and rank results by BM25.
+1. **Download** `BGL.zip` and `OpenStack.tar.gz` from Zenodo, then extract them safely (absolute paths and `..` entries are rejected).
+2. **Parse** the raw logs into the Loghub column layout. BGL lines are `Label Timestamp Date Node Time NodeRepeat Type Component Level Content`. OpenStack lines are `Logrecord Date Time Pid Level Component [ADDR] Content`; the three OpenStack files are merged in time order. Malformed lines are repaired rather than dropped: a missing NodeRepeat field, garbled text and binary bytes. All 4,747,963 + 207,820 lines are kept.
+3. **Derive a template** for every line by masking variable parts (any token with a digit, paths, UUIDs) as `<*>`, keeping field names. For example, `generating core.254` becomes `generating <*>`, and `lr:00004ed0 cr:28244842` becomes `lr:<*> cr:<*>`. Lines with nothing constant left, such as BGL's kernel register dumps (`0:000008ce 1:00086000 …`), become `<numeric-only message>`. Each template gets an id (`E1`, `E2`, … in order of first appearance). That gives 695 BGL templates and 73 OpenStack templates.
+4. **Load** the CSVs into SereneDB. `load.py` streams local files with `COPY … FROM STDIN`, so this works even when SereneDB runs in Docker or on another host.
+5. **Unify** both datasets into one `events` table with shared columns, and map each level to a **severity** (3 = FATAL/SEVERE/FAILURE/CRITICAL, 2 = ERROR, 1 = WARNING, 0 = INFO).
+6. **Attach owners.** The `component_team` view gives every component an owning team from the `ownership` table, by longest matching prefix (for example `nova.compute.manager` → `compute-core`).
+7. **Mark problems.** The `events_v` view adds `team` and `is_problem` (severity ≥ WARNING, or a BGL expert alert label).
+8. **Index the text.** `events_idx` is an inverted full-text index over the log message, lower-cased, normalised and stemmed, so searches use `@@` and rank results by BM25.
+
+Timings on a laptop: preparing takes about 25 s, and loading and indexing all 4.96M lines takes about 12 s. Every tool then answers in under 1 s on the full corpus.
+
+| After loading | BGL | OpenStack |
+|---|---|---|
+| Lines | 4,747,963 | 207,820 |
+| Problem lines | 1,012,140 | 3,314 |
+| Time span | 2005-06-03 → 2006-01-04 | 2017-05-14 → 2017-05-17 |
+| Templates | 695 | 73 |
+| Levels | INFO, FATAL, ERROR, WARNING, SEVERE, FAILURE | INFO, WARNING, ERROR, CRITICAL |
 
 ### Stage 2: Answer a question (every time)
 
@@ -66,17 +78,25 @@ LogIQ has two stages: data is **loaded once**, then **every question** goes thro
 
 ### A real run, traced
 
-The engineer question *"What is behind the 'Link has been severed' errors in BGL after September 2005?"* produced this trace:
+The engineer question *"What is behind the 'Link has been severed' errors in BGL after September 2005?"*, on the full data,
+produced this trace. Every number below was re-checked against the database:
 
 | Step | Tool call | What the database returned |
 |---|---|---|
 | Q1 | `corpus_overview()` | Dataset sizes, date ranges and team names |
-| Q2 | `search_logs("Link has been severed", dataset=bgl, start=2005-09-01)` | **16** matching lines (exact count), 2005-09-11 → 2005-12-14 |
-| Q3 | `investigate_event(bgl, line 1399)` | The failing line (FATAL, APP, team job-runtime), its neighbours, same-source problems |
-| Q4 | `preceding_patterns(bgl, 1399, 30 min)` | No log lines in the 30 minutes before it |
-| Q5 | `template_history(bgl, E29)` | The same message on **9** nodes over **8** days |
+| Q2 | `search_logs('"Link has been severed"', dataset=bgl, start=2005-09-01)` | **41,837** matching lines (exact `count(*)`), 2005-09-02 → 2006-01-03; 20 returned (truncated) |
+| Q3 | `investigate_event(bgl, line 3326688)` | The failing line: FATAL, APP, team **job-runtime**, alert type APPSEV, peer `172.16.96.116`. The same template has 15,273 lines on 1,024 nodes over 27 days. The 10 lines after it come from 10 different nodes, half in the same second. |
+| Q4 | `preceding_patterns(bgl, 3326688, 30 min)` | Templates over-represented in the 30 minutes before, compared with the whole dataset |
 
-**Answer:** every failure points at one peer address, `172.16.96.116`. The hypothesis is a service-side or network fault rather than many failing nodes. The next check is that node's logs and the network path to it.
+**Answer, in short:** a burst of the same FATAL error across many nodes at once. A separate check confirmed that all 41,837
+lines name the same peer, `172.16.96.116`. That points to a shared cause (the service node or the network path to it) rather
+than many independent node faults. The next check is the
+hardware and network logs for that peer and its link at the times of the first errors.
+
+Checking the answer against the evidence trail matters. In this run the model (NVIDIA Nemotron) wrongly said the lines before
+the failure came from the *same* node, and it over-read lift values that rested on a single line each. The trail showed both
+mistakes. Since then, `preceding_patterns` ignores templates seen fewer than 2 times by default, and the engineer prompt warns
+about both.
 
 The same pipeline answers a team lead with `recurring_problems` + `problem_trend`, and a manager with `risk_ranking`.
 
@@ -117,22 +137,37 @@ NVIDIA_API_KEY=nvapi-...
 
 `.env` is git-ignored. Never commit it.
 
-### 3. Load the data
+### 3. Get and load the data
 
 ```bash
-python load.py
+python prepare_data.py     # download + extract + parse the full datasets into data/  (~25 s after download)
+python load.py             # load into SereneDB and build the full-text index        (~12 s)
 ```
 
-This builds everything from Stage 1. It's safe to re-run, because it drops and rebuilds. By default it loads the Loghub **2,000-line
-samples** from GitHub. To load the full datasets, point it at the structured CSVs; each path must be a URL or a path the SereneDB
-*server* can read:
+`prepare_data.py` downloads the two archives from Zenodo into `data/`, about 63 MB compressed and 1.9 GB once extracted
+and parsed. It skips the download if the archives are already there. These are the same files as:
 
 ```bash
-BGL_SOURCE=/data/BGL.log_structured.csv OPENSTACK_SOURCE=/data/OpenStack.log_structured.csv python load.py
+curl -L -o data/BGL.zip "https://zenodo.org/records/8196385/files/BGL.zip?download=1"
+curl -L -o data/OpenStack.tar.gz "https://zenodo.org/records/8196385/files/OpenStack.tar.gz?download=1"
 ```
+
+Keep `?download=1` (otherwise Zenodo returns a preview page) and `-L` (Zenodo redirects). It writes
+`data/BGL.log_structured.csv` and `data/OpenStack.log_structured.csv`. `data/` is git-ignored.
+
+`load.py` uses those CSVs automatically when they exist. It's safe to re-run, because it drops and rebuilds everything. Other sources:
+
+| You want | Run |
+|---|---|
+| The full data (default once `prepare_data.py` has run) | `python load.py` |
+| The small Loghub 2k samples (quick demo, no download) | Delete or move `data/*.csv`, then `python load.py` (reads the samples from GitHub) |
+| Your own CSVs in the same columns | `BGL_SOURCE=path/or/url.csv OPENSTACK_SOURCE=path/or/url.csv python load.py` |
+
+Local files are streamed with `COPY`; URLs are read by SereneDB itself.
 
 The ownership rows in [sql/schema.sql](sql/schema.sql) are **sample data**. Replace them with the organisers' team-ownership
-table, then run `python load.py` again.
+table, then run `python load.py` again. With the sample rows, the full OpenStack data has two components with no owner:
+`oslo_service.periodic_task` (192 ERROR lines) and `keystonemiddleware.auth_token` (6 lines). They are reported as **unassigned**.
 
 ### 4. Start the web app
 
@@ -156,7 +191,7 @@ Example questions:
 
 | Role | Try asking |
 |---|---|
-| Engineer | *What is behind the "Link has been severed" errors in BGL after September 2005?*<br>*Investigate the data TLB error interrupts on BGL: what failed and what should I check?*<br>*Why does OpenStack log "Unknown base file" warnings, and what happened around them?* |
+| Engineer | *What is behind the "Link has been severed" errors in BGL after September 2005?*<br>*Investigate the data TLB error interrupts on BGL: what failed and what should I check?*<br>*What are the ERROR lines in OpenStack, which component logs them, and what happened just before?* |
 | Team lead | *Which problems recur most in BGL over the whole period, and which teams own them?*<br>*Which teams had the most problem lines between 2005-10-01 and 2006-01-01, and is it getting worse?*<br>*Compare June–August with September–December 2005 by team.* |
 | Manager | *What should we prioritise across BGL and OpenStack, and who should own each item?*<br>*Give me the top 3 risks in BGL for Q4 2005 and the action for each.*<br>*Is anything in OpenStack worth escalating?* |
 
@@ -265,7 +300,7 @@ Grounding rules in every role's prompt:
 
 | Object | What it is |
 |---|---|
-| `bgl`, `openstack` | Raw Loghub structured CSVs |
+| `bgl`, `openstack` | Parsed logs in Loghub's structured columns (from `prepare_data.py`, or the Loghub 2k samples) |
 | `ownership` | Team-ownership table: `(dataset, component_prefix, team)` |
 | `events` | Both datasets in one table: `ts`, `source`, `component`, `level`, `severity` 0-3, `is_alert`, `alert_type`, `template_id`, `template`, `content` |
 | `component_team` | Each component's owning team (longest prefix match, `unassigned` if none) |
@@ -280,7 +315,8 @@ static/index.html       web UI (no build step)
 agent.py                agent loop (Claude or OpenAI-compatible) and the three role prompts
 tools.py                the 11 SereneDB tools and their descriptions
 mcp_server.py           MCP server exposing the same tools
-load.py, sql/schema.sql loader and schema (events, ownership, full-text index)
+prepare_data.py         downloads the Zenodo archives, parses raw logs into data/*.log_structured.csv
+load.py, sql/schema.sql loader (COPY for local files) and schema (events, ownership, full-text index)
 worked_investigation.py writes WORKED_INVESTIGATION.md from real agent runs
 FUNCTIONS.md            tool reference
 agent_tools.py          small CLI for raw-table inspection (not used by the agent)
@@ -288,7 +324,9 @@ agent_tools.py          small CLI for raw-table inspection (not used by the agen
 
 ### Known limitations
 
-- **Sample data by default.** `load.py` loads the 2k-line samples unless you set `BGL_SOURCE` / `OPENSTACK_SOURCE`, so counts and trends describe the sample. Every result states its scope.
+- **Our own templates.** The Zenodo archives contain raw logs only, so `prepare_data.py` derives templates by masking variable tokens, not with Loghub's Drain parser. Template ids (`E1`…) therefore differ from the ids in Loghub's 2k samples. Masking can also merge messages that differ only in variable words, or split messages whose wording varies.
+- **OpenStack anomaly labels are not used.** `anomaly_labels.txt` names 4 VM instances with injected anomalies, but the labels are per instance, not per line, so they aren't mapped to `is_alert`. To look at them, search for an instance id, e.g. `search_logs("544fd51c-4edc-4780-baae-ba1d80a0acfc")`.
+- **OpenStack line order.** The three OpenStack files are merged and numbered in timestamp order, so neighbouring `line_id`s can come from different log files. Use `get_nearby_events(minutes=…, same_source=true)` to stay within one file.
 - **Sample ownership table.** Team names come from the sample rows in `sql/schema.sql` until the organisers' table replaces them.
 - **Heuristics, not root causes.** `candidate_cause` (the nearest earlier problem on the same source, or any source within 1 hour), `lift`, trend labels (a 1.5× change between the halves of the period; "single burst" when every line falls within 5% of it) and `priority_score` are simple, documented rules. They point to where to look; they don't prove a cause.
 - **Lines are not incidents.** No tool groups lines into incidents. `active_hours` and `active_days` are rough proxies for separate episodes.

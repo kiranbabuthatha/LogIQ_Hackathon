@@ -38,7 +38,7 @@ Limits work by fetching `limit + 1` rows. If the extra row exists, `truncated` i
 | Term | Meaning |
 |---|---|
 | Problem line | `severity ≥ 1` (WARNING and above) or a BGL expert alert label (`is_alert`). Severity: 3 = FATAL/SEVERE, 2 = ERROR, 1 = WARNING, 0 = INFO. |
-| Template | A Loghub `EventId` (e.g. `E29`): the same message shape with different values. |
+| Template | `template_id` (e.g. `E344`): the same message shape with different values. `prepare_data.py` derives templates for the full data by masking variable tokens; the Loghub 2k samples use Loghub's own `EventId`s. |
 | Source | Where a line came from: the BGL node, or the OpenStack log file. |
 | Team | Owning team of a component, from the `ownership` table (longest matching prefix, via the `component_team` view). |
 | Time window | `start` is inclusive and `end` exclusive, written like `2005-09-01` or `2005-09-01 08:00`. Timestamps are as recorded in each log. |
@@ -73,8 +73,8 @@ A one-call investigation of a single line. It returns:
 - `candidate_cause`: the nearest earlier problem on the same source, or on any source within 1 hour. This is a lead to check, not proof.
 - `suggested_checks`: next steps derived from those facts.
 
-**`preceding_patterns(dataset, line_id, minutes=30, limit=10)`**
-Finds templates that are over-represented in the `minutes` before an event. `lift` = (template's share of the window) ÷ (template's share of the dataset). `same_source_lines` counts lines from the target's source. This shows co-occurrence in time, not cause.
+**`preceding_patterns(dataset, line_id, minutes=30, limit=10, min_lines=2)`**
+Finds templates that are over-represented in the `minutes` before an event. `lift` = (template's share of the window) ÷ (template's share of the dataset). `same_source_lines` counts lines from the target's source. Templates seen fewer than `min_lines` times in the window are left out, because a lift of thousands from a single line is not evidence. This shows co-occurrence in time, not cause.
 
 **`template_history(dataset, template_id)`**
 The whole-dataset history of one template:

@@ -13,6 +13,7 @@
 !worked_investigation.py
 !agent_tools.py
 !load.py
+!prepare_data.py
 !sql/
 !sql/schema.sql
 !static/
