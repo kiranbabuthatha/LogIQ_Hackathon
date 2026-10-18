@@ -3,6 +3,7 @@
 !.gitignore
 .env
 !README.md
+!README_v2.md
 !FUNCTIONS.md
 !requirements.txt
 !.env.example
