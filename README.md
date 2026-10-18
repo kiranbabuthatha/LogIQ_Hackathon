@@ -281,7 +281,9 @@ and as an engineer, **quote the error text**, which goes straight into full-text
 
 ### 4.2 Connect your client
 
-Clients start the server themselves, so they need **absolute paths**. Get yours from the project folder:
+Two ways to connect. **stdio** (below): the client starts `mcp_server.py` itself — needs this repo and its venv on the
+same machine, with **absolute paths**. **HTTP** (end of this section): with the Docker stack running, any client can
+connect by URL — no repo on the client machine.
 
 ```bash
 echo "$PWD/.venv/bin/python"   # the command      (Windows: C:\path\to\LogIQ_Hackathon\.venv\Scripts\python.exe)
@@ -296,6 +298,16 @@ In the configs below, replace `/abs/path/LogIQ_Hackathon` with your folder. In J
 claude mcp add logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"              # this project only
 claude mcp add --scope user logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"  # or: every folder
 ```
+
+<details><summary><b>OpenCode</b> (tested)</summary>
+
+```bash
+opencode mcp add logiq --global -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"   # all projects
+opencode mcp add logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"            # or: this project only
+opencode mcp list                                                                  # verify: logiq ... connected
+```
+Note: since `tools.py` loads `.env` relative to the repo, no `--env` flag is needed.
+</details>
 
 <details><summary><b>Claude Desktop</b> (config validated)</summary>
 
@@ -365,6 +377,24 @@ Add a **stdio** server named `logiq`. Set the command to `/abs/path/LogIQ_Hackat
 
 "Untested" means we couldn't try that client here. Its config format comes from the client's documentation at the time of
 writing; check that documentation if something doesn't match.
+
+**HTTP variant — with the Docker stack running (§1.9), connect by URL instead:**
+
+```bash
+# Claude Code
+claude mcp add --transport http logiq http://localhost:8001/mcp
+# OpenCode
+opencode mcp add logiq --global --url http://localhost:8001/mcp
+# Codex
+codex mcp add logiq --url http://localhost:8001/mcp
+```
+
+- Cursor: add `{"mcpServers": {"logiq": {"url": "http://localhost:8001/mcp"}}}` to `mcp.json`.
+- Claude Desktop: HTTP servers are configured the same way in recent versions; if yours only supports stdio, use the
+  stdio blocks above.
+- VS Code (Copilot agent mode): `{ "servers": { "logiq": { "type": "http", "url": "http://localhost:8001/mcp" } } }`.
+- From another machine, replace `localhost` with the host's LAN IP (the container binds `0.0.0.0`). All 19 tools are
+  served over this URL — no repo, venv or paths on the client side.
 
 ### 4.3 Check the connection
 
