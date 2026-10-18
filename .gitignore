@@ -1,7 +1,7 @@
 # Allowlist: ignore everything except the files needed to run the project
 *
 !.gitignore
-!.env
+.env
 !README.md
 !FUNCTIONS.md
 !requirements.txt
