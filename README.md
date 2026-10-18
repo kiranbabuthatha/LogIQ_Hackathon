@@ -549,7 +549,8 @@ warns about both.
 
 ### Tools
 
-There are 11 parameterised tools. The model chooses them from their descriptions. Full inputs and outputs are in [FUNCTIONS.md](FUNCTIONS.md).
+There are 19 parameterised tools, layered from fundamental single-query primitives to decision-level rankings (the
+agent picks them from their descriptions). Full inputs and outputs are in [FUNCTIONS.md](FUNCTIONS.md).
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -559,10 +560,18 @@ There are 11 parameterised tools. The model chooses them from their descriptions
 | `investigate_event` | retrieval + aggregation | Failing line, owner, context, recurrence, same-source problems, candidate cause, next checks |
 | `preceding_patterns` | aggregation | Templates over-represented before an event (lift against the dataset baseline) |
 | `template_history` | aggregation | Whole-dataset history of one template |
+| `get_traceback` | retrieval | One complete multi-line exception: the `Traceback` anchor plus all continuation lines stitched into a single block |
+| `trace_instance` | retrieval | Ordered lifecycle of one entity id (instance/request/tenant): every line mentioning it, in time order, with per-template summary |
+| `extract_field` | structured extraction | Pull a value buried in message text (latency, HTTP status, request/tenant/instance ids) and summarise it: stats for numbers, top values for text |
+| `filter_numeric` | structured extraction | Filter lines by an extracted numeric field, e.g. `latency > 1` (slow requests) or `status >= 500` |
 | `recurring_problems` | aggregation | Templates that recur in a period: lines, active days/hours, sources, team |
-| `count_problems` | aggregation | Counts grouped by team, component, template, level, alert type, source or dataset |
-| `problem_trend` | aggregation | Problem lines per hour, day, week or month, split by team, component or dataset |
+| `count_problems` | aggregation | Counts grouped by team, component, template, level, alert type, source, severity or dataset |
+| `problem_trend` | aggregation | Problem lines per hour, day, week or month, split by team, component, severity or dataset; `template_id` accepts a comma-separated list |
 | `compare_periods` | aggregation | Two periods side by side: new, gone, rising, falling |
+| `count_incidents` | aggregation | Collapses line bursts into episodes (one incident = one source + time bucket), per the lines-vs-incidents rule |
+| `correlate_templates` | analytics | Which templates fire together: Pearson correlation of daily per-template counts, with teams and co-active days |
+| `correlation_chains` | analytics | Strict ±1 correlations grouped into chains: confirmed only when the same bundle repeats on ≥ `min_repeats` days; timestamp-based `order_proposal` (a sequencing hint, not causation); negative pairs listed as regime indicators |
+| `chain_profile` | analytics | One confirmed chain as a single repeated event: episodes, trend, proposed order and a ±context window around an episode |
 | `risk_ranking` | aggregation | Ranked risks by pattern or by team, with share, spread and trend |
 
 The MCP server also offers three **prompts**, `engineer`, `team_lead` and `manager`, each taking one `question` argument. They use the same text as the web app's role prompts.
