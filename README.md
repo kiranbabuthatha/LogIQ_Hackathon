@@ -558,8 +558,19 @@ python agent.py team_lead "Which problems recur most in BGL and who owns them?"
 python agent.py manager "What should we prioritise across BGL and OpenStack?"
 ```
 
-**Worked investigation.** [WORKED_INVESTIGATION.md](WORKED_INVESTIGATION.md) shows one question per role, run through the agent,
-with every tool call, SQL statement, row count and answer. To regenerate it: `python worked_investigation.py`.
+**Worked investigation.** The [`worked_investigation/`](worked_investigation/) folder holds the complete worked
+investigation of a real recurring pattern (OpenStack disk-processing failures, May 16–17, 2017):
+
+- [`submission_report_illustrated.md`](worked_investigation/submission_report_illustrated.md) — the report: one question
+  per role (engineer, team lead, manager), each with its answer and recommended action, both full-text search evidence
+  and whole-corpus aggregation, and an explicit statement of what the data does and does not establish. The query trail
+  is embedded per role and collapsed for readability.
+- [`evidence.jsonl`](worked_investigation/evidence.jsonl) — the raw evidence trail: every tool call with its inputs,
+  executed SQL, parameters, row counts and returned rows.
+- [`assets/`](worked_investigation/assets/) — the report's figures (with draw.io sources), regenerable.
+
+The trace was captured from a real agent run (`agent.py`, NVIDIA Nemotron); see also the visual summary in
+[`worked_investigation/submission_report_illustrated.md`](worked_investigation/submission_report_illustrated.md).
 
 ---
 
@@ -765,8 +776,10 @@ tools.py                the 11 SereneDB tools and their descriptions
 mcp_server.py           MCP server: the same tools plus the three role prompts
 prepare_data.py         downloads the Zenodo archives, parses raw logs into data/*.log_structured.csv
 load.py, sql/schema.sql loader (COPY for local files) and schema (events, ownership, full-text index)
-worked_investigation.py writes WORKED_INVESTIGATION.md from real agent runs
-WORKED_INVESTIGATION.md one worked investigation per role, with every query
+worked_investigation/            worked investigation: illustrated report, evidence trail, figures
+  submission_report_illustrated.md   one worked investigation per role (questions, calls, SQL, answers)
+  evidence.jsonl                     raw evidence trail: every tool call, SQL and returned rows
+  assets/                            report figures with draw.io sources
 FUNCTIONS.md            tool reference
 agent_tools.py          small CLI for raw-table inspection (not used by the agent)
 ```
