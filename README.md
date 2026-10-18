@@ -106,8 +106,10 @@ The same pipeline answers a team lead with `recurring_problems` + `problem_trend
 
 ### 1. Install
 
-Requirements: Python 3.10+, the connection string of a SereneDB instance, and credentials for one model provider: an
-Anthropic API key, an NVIDIA API key, or a local OpenAI-compatible server (see [Choosing the model provider](#choosing-the-model-provider)).
+Requirements:
+- Python 3.10+
+- Docker, to run SereneDB locally
+- Credentials for one model provider: an Anthropic API key, an NVIDIA API key, or a local OpenAI-compatible server (see [Choosing the model provider](#choosing-the-model-provider))
 
 ```bash
 git clone <repo-url> LogIQ && cd LogIQ
@@ -116,28 +118,114 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure `.env`
+### 2. Start SereneDB and connect to it
+
+SereneDB runs locally; the organisers don't host an instance. It speaks the PostgreSQL protocol, so any PostgreSQL client or
+driver works, including `psycopg`, which LogIQ uses.
+
+**Start it with Docker, setting a password:**
+
+```bash
+docker run -d --name serenedb -p 7890:7890 \
+  -e POSTGRES_PASSWORD=change-me \
+  -v serenedb-data:/var/lib/serenedb \
+  serenedb/serenedb:26.09.2
+```
+
+- `-p 7890:7890` exposes the database port on `localhost:7890`.
+- `-v serenedb-data:/var/lib/serenedb` keeps the data in a Docker volume, so it survives restarts. Leave it off for a throwaway container.
+- `-e POSTGRES_PASSWORD=…` sets the password of the `postgres` superuser when the data volume is first created.
+- `serenedb/serenedb:26.09.2` is the version LogIQ was tested with. Plain `serenedb/serenedb` gives the latest release.
+
+**Why the password matters:** a fresh SereneDB server has one user, `postgres`, with no password, and that user is trusted
+only for connections made *inside* the server's own machine. To SereneDB, connections from your computer into the Docker
+container are network connections, and a user without a password can never log in over the network. So the
+organisers' example `psql -h localhost -p 7890` works inside the container, but LogIQ needs a password. (We tested this
+with `serenedb/serenedb:26.09.2`.)
+
+If your container already runs without a password, set one from inside it. You don't need to recreate it:
+
+```bash
+docker exec -it serenedb psql -h 127.0.0.1 -p 7890 -U postgres -c "ALTER ROLE postgres PASSWORD 'change-me'"
+```
+
+**Manage the container:**
+
+```bash
+docker stop serenedb      # stop (data stays in the volume)
+docker start serenedb     # start again, e.g. after a reboot: the container does not start on its own
+docker ps                 # check that it is running
+```
+
+**Test the connection** from your computer:
+
+```bash
+psql "postgresql://postgres:change-me@localhost:7890/postgres" -c "SELECT version()"
+# or, without psql:
+.venv/bin/python -c "import psycopg; print(psycopg.connect('postgresql://postgres:change-me@localhost:7890/postgres').execute('SELECT version()').fetchone())"
+```
+
+You should see `PostgreSQL 18.3 (SereneDB 26.09.2)` or similar. A GUI client works too. For VS Code SQLTools, install the
+*SQLTools PostgreSQL/Cockroach Driver* and connect to host `localhost`, port `7890`, database `postgres`, user `postgres`
+and your password.
+
+**About local files:** the SereneDB server reads files from *its own* filesystem, so inside Docker it cannot see files on
+your computer. LogIQ handles this for you: `load.py` streams local CSVs to the server with `COPY … FROM STDIN`, so no mount
+is needed. For your own SQL with `read_csv('/data/…')`, mount a folder by adding `-v "$PWD/data":/data` to `docker run`.
+Remote files over HTTP(S) or S3 need no mount.
+
+<details><summary>Troubleshooting the connection</summary>
+
+| Error | Cause | Fix |
+|---|---|---|
+| `connection refused` | Docker or the container isn't running | Start Docker, then `docker start serenedb` |
+| `fe_sendauth: no password supplied` | The DSN has no password | Add the password to `SERENEDB_DSN` |
+| `password authentication failed` | Wrong password, or the user has none yet | Use the right password, or set one with the `ALTER ROLE` command above |
+| `No files found that match the pattern` (in your own SQL) | The server can't see a local path | Mount the folder (`-v "$PWD/data":/data`) or use `load.py`, which streams files |
+| `port is already allocated` on `docker run` | Something else uses port 7890 | Stop it, or map another port (`-p 7891:7890`) and use that port in the DSN |
+
+</details>
+
+### 3. Configure `.env`
 
 ```bash
 cp .env.example .env               # Windows: copy .env.example .env
 ```
 
-Edit `.env`. You always need the database, plus **one** model provider:
+Edit `.env`. You always need the database connection, plus **one** model provider. A working example for the Docker setup
+above, using NVIDIA:
 
 ```
-SERENEDB_DSN=postgresql://user:password@host:port/dbname
-
-# Option A: Claude (default)
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Option B: NVIDIA
+SERENEDB_DSN=postgresql://postgres:change-me@localhost:7890/postgres
 LOGIQ_PROVIDER=nvidia
 NVIDIA_API_KEY=nvapi-...
 ```
 
-`.env` is git-ignored. Never commit it.
+`SERENEDB_DSN` accepts either PostgreSQL connection format:
 
-### 3. Get and load the data
+| Format | Example |
+|---|---|
+| URL | `postgresql://postgres:change-me@localhost:7890/postgres` |
+| Key/value | `host=localhost port=7890 dbname=postgres user=postgres password=change-me` |
+
+In the URL format, special characters in the password must be percent-encoded, for example `@` becomes `%40`. The key/value format needs no encoding.
+
+All settings:
+
+| Setting | Required | What it does |
+|---|---|---|
+| `SERENEDB_DSN` | **yes** | How to connect to SereneDB (see above) |
+| `LOGIQ_PROVIDER` | no | `anthropic` (default), `nvidia`, or `openai` for any OpenAI-compatible server |
+| `ANTHROPIC_API_KEY` *or* `ANTHROPIC_AUTH_TOKEN` | with `anthropic` | Claude credentials; set only one of the two |
+| `NVIDIA_API_KEY` | with `nvidia` | Key from build.nvidia.com |
+| `LOGIQ_BASE_URL`, `LOGIQ_API_KEY` | with `openai` | Server address, e.g. `http://localhost:11434/v1` for Ollama, and its key if it needs one |
+| `LOGIQ_MODEL` | no | Model to use; each provider has a default |
+| `LOGIQ_EFFORT` | no | Claude only: `low` / `medium` (default) / `high` / `xhigh` / `max` |
+| `BGL_SOURCE`, `OPENSTACK_SOURCE` | no | Load data from somewhere other than `data/` (see step 4) |
+
+Credentials for providers you aren't using can stay in the file. `.env` is git-ignored; never commit it.
+
+### 4. Get and load the data
 
 ```bash
 python prepare_data.py     # download + extract + parse the full datasets into data/  (~25 s after download)
@@ -165,11 +253,13 @@ Keep `?download=1` (otherwise Zenodo returns a preview page) and `-L` (Zenodo re
 
 Local files are streamed with `COPY`; URLs are read by SereneDB itself.
 
-The ownership rows in [sql/schema.sql](sql/schema.sql) are **sample data**. Replace them with the organisers' team-ownership
-table, then run `python load.py` again. With the sample rows, the full OpenStack data has two components with no owner:
-`oslo_service.periodic_task` (192 ERROR lines) and `keystonemiddleware.auth_token` (6 lines). They are reported as **unassigned**.
+**Team ownership.** The team-ownership table is part of this repo. It's the `ownership` rows in [sql/schema.sql](sql/schema.sql),
+which map component prefixes to the teams of a fictional platform organisation (for example `KERNEL` → `compute-kernel`,
+`nova.compute` → `compute-core`). To change owners, edit those rows and run `python load.py` again. Two OpenStack
+components currently have no owner and are reported as **unassigned**: `oslo_service.periodic_task` (192 ERROR lines) and
+`keystonemiddleware.auth_token` (6 lines).
 
-### 4. Start the web app
+### 5. Start the web app
 
 ```bash
 uvicorn app:app --port 8000
@@ -178,7 +268,7 @@ uvicorn app:app --port 8000
 Open **http://127.0.0.1:8000**. The header shows the loaded data (lines, problem lines, date range per dataset) and the
 agent status. **Agent ready · <model>** means it's configured. If you see **Agent offline**, the banner says which setting is missing.
 
-### 5. Ask a question (tab: *Ask the agent*)
+### 6. Ask a question (tab: *Ask the agent*)
 
 1. **Pick a role card:** Engineer, Team lead or Manager. Each card shows what that role gets.
 2. **Ask:** click one of the example questions, or type your own and press **Ask** (or Ctrl/⌘ + Enter).
@@ -200,7 +290,7 @@ Tips for good answers:
 - **Name the dataset** (BGL or OpenStack) when you mean one.
 - For engineers, **quote the error text** you saw; it goes straight into full-text search.
 
-### 6. Run tools yourself (tab: *Explore tools*)
+### 7. Run tools yourself (tab: *Explore tools*)
 
 1. Choose a tool from the list; its description explains what it does.
 2. Fill in the form. Fields marked `*` are required, and the rest are optional filters.
@@ -208,7 +298,7 @@ Tips for good answers:
 
 This tab needs no model or API key. It's useful for checking an agent's claim, or exploring the data directly.
 
-### 7. See the whole corpus (tab: *Corpus & teams*)
+### 8. See the whole corpus (tab: *Corpus & teams*)
 
 Whole-corpus counts calculated in SereneDB: lines, problem lines, alerts and time span per dataset, problem lines per team,
 and lines per level.
@@ -327,12 +417,15 @@ agent_tools.py          small CLI for raw-table inspection (not used by the agen
 - **Our own templates.** The Zenodo archives contain raw logs only, so `prepare_data.py` derives templates by masking variable tokens, not with Loghub's Drain parser. Template ids (`E1`…) therefore differ from the ids in Loghub's 2k samples. Masking can also merge messages that differ only in variable words, or split messages whose wording varies.
 - **OpenStack anomaly labels are not used.** `anomaly_labels.txt` names 4 VM instances with injected anomalies, but the labels are per instance, not per line, so they aren't mapped to `is_alert`. To look at them, search for an instance id, e.g. `search_logs("544fd51c-4edc-4780-baae-ba1d80a0acfc")`.
 - **OpenStack line order.** The three OpenStack files are merged and numbered in timestamp order, so neighbouring `line_id`s can come from different log files. Use `get_nearby_events(minutes=…, same_source=true)` to stay within one file.
-- **Sample ownership table.** Team names come from the sample rows in `sql/schema.sql` until the organisers' table replaces them.
+- **Fictional ownership.** Teams come from the `ownership` table in `sql/schema.sql`, which describes a fictional organisation. Two OpenStack components are unassigned (see step 4).
 - **Heuristics, not root causes.** `candidate_cause` (the nearest earlier problem on the same source, or any source within 1 hour), `lift`, trend labels (a 1.5× change between the halves of the period; "single burst" when every line falls within 5% of it) and `priority_score` are simple, documented rules. They point to where to look; they don't prove a cause.
 - **Lines are not incidents.** No tool groups lines into incidents. `active_hours` and `active_days` are rough proxies for separate episodes.
 - **Timestamps** are as recorded in each log, with no timezone conversion. BGL and OpenStack cover different years, so trends are computed per dataset.
 - **Web UI** has no login, and keeps conversations in memory, so a restart clears them. Run it locally or behind your own access control.
-- **Not implemented:** on-demand indexing, the OpenTelemetry Parquet data, and row-level security per role.
+- **Not implemented:** on-demand indexing, the OpenTelemetry Parquet data, and row-level security per role. These are optional extras, judged separately from the main score.
+  - **Reading the OpenTelemetry data in place works.** SereneDB queries the public Parquet files over HTTPS with no download: `SELECT * FROM read_parquet('https://public-pme.s3.eu-west-3.amazonaws.com/text_bench/part_000.parquet') LIMIT 10`.
+  - **Measured on this setup, for one file (1,000,000,000 rows):** the schema took 1.5 s, the row count 0.2 s, and sample rows 0.8 s. A full aggregation (lines per service and severity) took **132 s**, which is too slow to run on every agent question.
+  - **The path forward:** a view over the files plus an inverted index on a chosen time window (`CREATE INDEX … USING inverted` on the view, refreshed with `REINDEX INDEX`), or a summary table built once.
 
 ### Data and citation
 
