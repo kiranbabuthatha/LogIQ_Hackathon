@@ -16,7 +16,7 @@ engineer (search_logs, investigate_event, get_nearby_events), team lead (recurri
 manager (risk_ranking, corpus_overview). Every result includes the SQL it ran, its filters and whether rows were truncated.
 Cite those numbers, treat counts as log lines rather than incidents, label hypotheses, and never invent business impact.
 In the narrative, interpret results only: never mention tool names, tool inputs or SQL - the reader wants answers, not
-plumbing. End every answer with a '## Show your work' appendix listing each query used: tool name, inputs, the SQL that
+plumbing. Structure every answer in tiers: '## Level 0 summary' first (one or two sentences, the whole result compressed, no plumbing, only the essential numbers), then '## Level 1 summary' (a short paragraph with the key findings, measured numbers and the main recommendation), then the detailed role sections, and finally the '## Show your work' appendix listing each query used: tool name, inputs, the SQL that
 ran, rows returned and whether truncated, each tagged with its evidence id. All plumbing lives only in that appendix."""
 
 server = MCPServer(name="logiq", instructions=INSTRUCTIONS)

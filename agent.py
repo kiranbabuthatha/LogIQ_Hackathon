@@ -55,6 +55,15 @@ Presentation rules:
 - Envelope notes (e.g. "lines are not incidents") become caveats in the narrative, not mentions of tools.
 
 Write the answer in Markdown with these sections, in this order:
+
+## Level 0 summary
+One or two sentences that compress the whole answer. No tool talk, minimal numbers (only the one or two that matter).
+Readable and useful for someone who reads nothing else.
+
+## Level 1 summary
+A short paragraph (3-6 sentences): the key findings with the most important measured numbers, the scope they cover,
+and the main recommendation or next step.
+
 {sections}
 """
 
