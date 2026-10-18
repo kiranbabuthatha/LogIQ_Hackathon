@@ -27,7 +27,8 @@ import psycopg
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
-load_dotenv()
+from pathlib import Path
+load_dotenv(Path(__file__).resolve().parent / ".env")
 DSN = os.environ["SERENEDB_DSN"]
 
 DATASETS = ("bgl", "openstack")
@@ -36,8 +37,9 @@ BUCKETS = ("hour", "day", "week", "month")
 GROUP_BY = {  # allowed grouping keys -> SQL expression (identifiers can't be parameters)
     "dataset": "dataset", "team": "team", "component": "component", "level": "level",
     "template": "template_id", "alert_type": "alert_type", "source": "source",
+    "severity": "severity",
 }
-SPLIT_BY = {"none": None, "dataset": "dataset", "team": "team", "component": "component"}
+SPLIT_BY = {"none": None, "dataset": "dataset", "team": "team", "component": "component", "severity": "severity"}
 CONTENT_CHARS = 300   # log text is cut to this length in returned rows
 CAUSE_GAP = timedelta(hours=1)
 LINES_NOT_INCIDENTS = "Counts are matching log lines, not separate incidents; one fault can log many lines."
@@ -226,6 +228,9 @@ def preceding_patterns(dataset: str, line_id: int, minutes: float = 30, limit: i
     if not rows:
         ev.notes.append(f"No template appears {min_lines}+ times in the {minutes} minutes before this event, so there is "
                         "no over-represented pattern; try a longer window or min_lines=1.")
+    elif not any(r["same_source_lines"] for r in rows):
+        ev.notes.append(f"None of these lines come from the failing line's source ({t[0]['source']}): they were logged by "
+                        "other sources. Do not describe them as happening on the failing node.")
     ev.notes += ["lift = share of the window ÷ share of the whole dataset; lift > 1 means over-represented before the event.",
                  "This is co-occurrence in time, not proof of cause. Few lines in the window make lift unstable."]
     return ev.result({"target": {"line_id": line_id, **t[0]}, "window_start": f"{lo:%Y-%m-%d %H:%M:%S}", "patterns": rows},
@@ -303,11 +308,19 @@ def investigate_event(dataset: str, line_id: int, window: int = 10):
 
     for r in around + same_source + [t]:
         r["content"] = _cut(r["content"])
-    ev.notes += ["candidate_cause is the nearest earlier problem on the same source (or any source within 1 hour). "
+    before = [r for r in around if r["line_id"] < line_id]
+    after = [r for r in around if r["line_id"] > line_id]
+    for r in before + after:  # say it explicitly: neighbours in the log are often from other nodes
+        r["same_source_as_target"] = r["source"] == t["source"]
+    context = {f"{side}_{kind}": sum(r["same_source_as_target"] == same for r in rows)
+               for side, rows in (("before", before), ("after", after)) for kind, same in (("same_source", True), ("other_sources", False))}
+    ev.notes += [f"Context: {context['before_same_source']} of {len(before)} lines before and {context['after_same_source']} of "
+                 f"{len(after)} after come from the same source ({t['source']}); the rest are from other sources. "
+                 "Only attribute a line to the failing node when same_source_as_target is true.",
+                 "candidate_cause is the nearest earlier problem on the same source (or any source within 1 hour). "
                  "It is a lead to check, not an established cause.", LINES_NOT_INCIDENTS]
-    return ev.result({"what_failed": t, "before": [r for r in around if r["line_id"] < line_id],
-                      "after": [r for r in around if r["line_id"] > line_id], "candidate_cause": cause,
-                      "recurrence_in_dataset": recurrence, "same_source_problems": same_source,
+    return ev.result({"what_failed": t, "context_summary": context, "before": before, "after": after,
+                      "candidate_cause": cause, "recurrence_in_dataset": recurrence, "same_source_problems": same_source,
                       "suggested_checks": checks}, f"{dataset}, line {line_id} ± {window} plus whole-dataset recurrence")
 
 
@@ -355,8 +368,9 @@ def problem_trend(bucket: str = "week", dataset: Optional[str] = None, start: Op
                                         component=component, template_id=template_id, split_by=split_by))
     where, params = _filters(dataset, start, end, team, component)
     if template_id:
-        where += " AND template_id = %s"
-        params.append(template_id)
+        ids = [t.strip() for t in template_id.split(",") if t.strip()]
+        where += " AND template_id IN (%s)" % ", ".join(["%s"] * len(ids))
+        params.extend(ids)
     split = SPLIT_BY[split_by]
     sel = f", {split} AS {split_by}" if split else ""
     rows = ev.run(f"Problem lines per {bucket}" + (f" and {split_by}" if split else ""),
@@ -517,6 +531,399 @@ def risk_ranking(dataset: Optional[str] = None, start: Optional[str] = None, end
     return ev.result({"periods": periods, "risks": risks[:top]}, _scope(dataset, start, end))
 
 
+
+# ------------------------------------------- tools: structured extraction & correlation
+
+# Fields that live inside free text (dataset-aware registry; identical schema for any dataset).
+FIELDS = {
+    "latency":     (r"time: ([0-9]+\.?[0-9]*)", "number", "request latency in seconds (OpenStack 'time:' field)"),
+    "status":      (r"status: (\d{3})", "number", "HTTP status code (OpenStack)"),
+    "req_id":      (r"req-([0-9a-fA-F-]{36})", "text", "OpenStack request id"),
+    "tenant_id":   (r"\] [0-9a-fA-F]{32} ([0-9a-fA-F]{32}) ", "text", "second 32-hex token in the request bracket = tenant id"),
+    "instance_id": (r"instances? ([0-9a-fA-F-]{36})", "text", "UUID right after the word 'instance(s)'"),
+}
+
+
+def get_traceback(dataset: str, line_id: int, max_lines: int = 40):
+    """Return one complete multi-line exception (all continuation lines) for a traceback header line."""
+    ev = Evidence("get_traceback", {"dataset": dataset, "line_id": line_id})
+    cols = "line_id, ts, level, component, source, template_id, content"
+    hdr = ev.run("Header line", f"SELECT {cols} FROM events_v WHERE dataset = %s AND line_id = %s", (dataset, line_id))
+    if not hdr:
+        raise ValueError("line_id not found in this dataset")
+    h = hdr[0]
+    anchor = ev.run(
+        "Traceback anchor (nearest preceding 'Traceback (most recent call last)' in the same component)",
+        f"SELECT {cols} FROM events_v WHERE dataset = %s AND line_id <= %s AND line_id > %s - 60 "
+        "AND component = %s AND content LIKE '%%Traceback (most recent call last)%%' "
+        "ORDER BY line_id DESC LIMIT 1",
+        (dataset, line_id, line_id, h["component"]))
+    start = anchor[0] if anchor else h
+    rows = ev.run(
+        "All exception lines: consecutive in log order, same component, within 2 s of the anchor",
+        f"SELECT {cols} FROM events_v WHERE dataset = %s AND line_id >= %s AND component = %s "
+        "AND ts <= (SELECT ts FROM events_v WHERE dataset = %s AND line_id = %s) + INTERVAL 2 SECOND "
+        "ORDER BY line_id LIMIT %s",
+        (dataset, start["line_id"], h["component"], dataset, start["line_id"], max_lines + 1))
+    complete = len(rows) <= max_lines
+    ev.notes += ["All returned lines belong to the same exception; treat them as one incident.",
+                 "Window heuristic: consecutive log order, same component, within 2 s — may include the first line of the next message."]
+    body = [{k: (_cut(v) if k == "content" else v) for k, v in r.items()} for r in rows]
+    return ev.result({"start_line_id": start["line_id"], "lines": body,
+                      "exception_last_line": body[-1]["content"] if body else None,
+                      "truncated": not complete},
+                     f"{dataset}, one exception around line_id {line_id}")
+
+
+def trace_instance(dataset: str, instance_id: str, limit: int = 50):
+    """Ordered lifecycle of one entity id (instance / request / tenant / node) across the dataset."""
+    if len(instance_id) < 8:
+        raise ValueError("instance_id must be at least 8 characters (avoid full-table scans)")
+    ev = Evidence("trace_instance", {"dataset": dataset, "instance_id": instance_id})
+    where, params = _filters(dataset=dataset, problems_only=False)
+    like = f"%{instance_id}%"
+    summary = ev.run(
+        "Lines mentioning the id", f"SELECT count(*) AS lines, count(DISTINCT source) AS sources, "
+        "count(DISTINCT template_id) AS templates, min(ts) AS first_ts, max(ts) AS last_ts "
+        f"FROM events_v WHERE {where} AND content ILIKE %s", (*params, like))
+    by_tpl = ev.run(
+        "Templates involved (most lines first)",
+        f"SELECT template_id, ANY_VALUE(template) AS template, count(*) AS lines "
+        f"FROM events_v WHERE {where} AND content ILIKE %s GROUP BY template_id ORDER BY lines DESC LIMIT 15",
+        (*params, like))
+    rows = ev.run(
+        "Lines in time order (the lifecycle)",
+        f"SELECT line_id, ts, level, component, source, template_id, content FROM events_v "
+        f"WHERE {where} AND content ILIKE %s ORDER BY ts, line_id LIMIT %s",
+        (*params, like, limit + 1))
+    truncated = len(rows) > limit
+    ev.notes += ["Lines are matched by substring, so an id may also appear in messages about other objects.",
+                 "Matching is a full scan without an index; keep the window small on large datasets."]
+    return ev.result({"summary": summary[0], "templates": by_tpl,
+                      "lines": [{k: (_cut(v) if k == "content" else v) for k, v in r.items()} for r in rows[:limit]],
+                      "truncated": truncated},
+                     f"{dataset}, lines mentioning {instance_id}")
+
+
+def extract_field(dataset: str, field: str, start: Optional[str] = None, end: Optional[str] = None, top: int = 10):
+    """Extract a structured field that lives inside the message text (latency, status, ids) and summarise it."""
+    if field not in FIELDS:
+        raise ValueError(f"field must be one of {sorted(FIELDS)}")
+    pattern, kind, descr = FIELDS[field]
+    ev = Evidence("extract_field", {"dataset": dataset, "field": field, "kind": kind})
+    where, params = _filters(dataset=dataset, start=start, end=end, problems_only=False)
+    total = ev.run("Lines in scope", f"SELECT count(*) AS n FROM events_v WHERE {where}", params)
+    if kind == "number":
+        rows = ev.run(
+            "Distribution of the extracted numeric field (TRY_CAST keeps non-matching lines out)",
+            f"SELECT count(*) AS n, MIN(v) AS min, MAX(v) AS max, AVG(v) AS avg, "
+            "QUANTILE_CONT(v, 0.5) AS p50, QUANTILE_CONT(v, 0.95) AS p95 FROM "
+            f"(SELECT TRY_CAST(regexp_extract(content, %s, 1) AS DOUBLE) AS v FROM events_v WHERE {where}) "
+            "WHERE v IS NOT NULL", (pattern, *params))
+        extracted = rows[0]["n"] or 0
+        data = {"field": field, "description": descr, "lines_in_scope": total[0]["n"],
+                "lines_with_field": extracted,
+                "coverage_pct": round(100 * extracted / max(1, total[0]["n"]), 2),
+                "stats": rows[0]}
+    else:
+        rows = ev.run(
+            "Most common values of the extracted text field",
+            f"SELECT regexp_extract(content, %s, 1) AS value, count(*) AS n FROM events_v WHERE {where} "
+            "GROUP BY 1 ORDER BY n DESC LIMIT %s", (pattern, *params, top))
+        extracted = sum(r["n"] for r in rows)
+        data = {"field": field, "description": descr, "lines_in_scope": total[0]["n"],
+                "distinct_values_shown": len(rows), "top_values": rows,
+                "notes": "Counts cover the top values only; long tail not enumerated."}
+    ev.notes += ["Extraction is a regex over message text; values not matching the pattern are excluded."]
+    return ev.result(data, _scope(dataset, start, end, problems_only=False))
+
+
+def filter_numeric(dataset: str, field: str, op: str, value: float,
+                   start: Optional[str] = None, end: Optional[str] = None, limit: int = 20):
+    """Filter lines by a numeric field extracted from the message text (e.g. latency > 1 s)."""
+    if field not in FIELDS or FIELDS[field][1] != "number":
+        raise ValueError(f"field must be a numeric field, one of {[k for k, v in FIELDS.items() if v[1] == 'number']}")
+    if op not in ("<", "<=", ">", ">=", "="):
+        raise ValueError("op must be one of < <= > >= =")
+    pattern = FIELDS[field][0]
+    ev = Evidence("filter_numeric", {"dataset": dataset, "field": field, "op": op, "value": value})
+    where, params = _filters(dataset=dataset, start=start, end=end, problems_only=False)
+    num = f"TRY_CAST(regexp_extract(content, %s, 1) AS DOUBLE)"
+    stats = ev.run(
+        "How many lines satisfy the numeric condition",
+        f"SELECT count(*) AS n, MIN(v) AS min, MAX(v) AS max, AVG(v) AS avg FROM "
+        f"(SELECT {num} AS v FROM events_v WHERE {where}) WHERE v IS NOT NULL AND v {op} %s",
+        (pattern, *params, value))
+    rows = ev.run(
+        f"Sample lines with {field} {op} {value} (oldest first)",
+        f"SELECT line_id, ts, level, component, source, template_id, content FROM events_v WHERE {where} "
+        f"AND {num} {op} %s ORDER BY ts LIMIT %s",
+        (*params, pattern, value, limit + 1))
+    truncated = len(rows) > limit
+    ev.notes += [f"Field extracted with regex {pattern!r}; TRY_CAST skips lines where the pattern does not match.",
+                 LINES_NOT_INCIDENTS]
+    return ev.result({"matching_lines": stats[0]["n"], "stats": stats[0],
+                      "lines": [{k: (_cut(v) if k == "content" else v) for k, v in r.items()} for r in rows[:limit]],
+                      "truncated": truncated},
+                     f"{dataset}, {field} {op} {value}")
+
+
+def count_incidents(dataset: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None,
+                    bucket: str = "minute", top: int = 15, min_lines: int = 2):
+    """Collapse line bursts into episodes: one incident = one (source, time bucket) with >=1 line of a template."""
+    if bucket not in ("minute", "hour", "day"):
+        raise ValueError("bucket must be minute, hour or day")
+    ev = Evidence("count_incidents", {"dataset": dataset, "start": start, "end": end, "bucket": bucket})
+    where, params = _filters(dataset=dataset, start=start, end=end)
+    rows = ev.run(
+        f"Episodes = distinct (source, {bucket}) pairs per template",
+        f"SELECT template_id, ANY_VALUE(template) AS template, ANY_VALUE(team) AS team, count(*) AS lines, "
+        f"count(DISTINCT source || '|' || date_trunc(%s, ts)) AS episodes, "
+        f"count(DISTINCT source) AS sources, min(ts) AS first_ts, max(ts) AS last_ts "
+        f"FROM events_v WHERE {where} GROUP BY template_id HAVING count(*) >= %s ORDER BY lines DESC LIMIT %s",
+        (bucket, *params, min_lines, top))
+    total = ev.run("Total problem lines in scope", f"SELECT count(*) AS n FROM events_v WHERE {where}", params)
+    for r in rows:
+        r["avg_lines_per_episode"] = round(r["lines"] / max(1, r["episodes"]), 1)
+    ev.notes += [f"One episode = one (source, {bucket}) bucket; a fault logging 500 lines in one minute counts as 1 episode.",
+                 "Episodes across different sources are counted separately (same fault on 12 nodes = 12 episodes).",
+                 LINES_NOT_INCIDENTS]
+    return ev.result({"total_problem_lines": total[0]["n"], "templates": rows}, _scope(dataset, start, end))
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    cov = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+    vx = sum((a - mx) ** 2 for a in xs) ** 0.5
+    vy = sum((b - my) ** 2 for b in ys) ** 0.5
+    return cov / (vx * vy) if vx and vy else 0.0
+
+
+def correlate_templates(dataset: str, start: Optional[str] = None, end: Optional[str] = None,
+                        min_r: float = 0.9, top: int = 20, min_active_days: int = 5, min_lines: int = 50):
+    """Which templates fire together: Pearson correlation of daily per-template counts (like our offline analysis)."""
+    ev = Evidence("correlate_templates", {"dataset": dataset, "start": start, "end": end,
+                                          "min_r": min_r, "min_active_days": min_active_days})
+    where, params = _filters(dataset=dataset, start=start, end=end)
+    rows = ev.run(
+        "Daily line counts per template",
+        f"SELECT template_id, CAST(ts AS DATE) AS day, count(*) AS c FROM events_v "
+        f"WHERE {where} GROUP BY 1, 2", params)
+    names = ev.run(
+        "Template texts", f"SELECT template_id, ANY_VALUE(template) AS template, ANY_VALUE(team) AS team, "
+        f"count(*) AS lines FROM events_v WHERE {where} GROUP BY 1", params)
+    text = {r["template_id"]: r for r in names}
+    days = sorted({r["day"] for r in rows})
+    per_tpl = {}
+    for r in rows:
+        per_tpl.setdefault(r["template_id"], {})[r["day"]] = r["c"]
+    kept = {t: d for t, d in per_tpl.items()
+            if len(d) >= min_active_days and sum(d.values()) >= min_lines and t in text}
+    keys = sorted(kept)
+    import math
+    series = {t: [math.log1p(kept[t].get(d, 0)) for d in days] for t in keys}
+    pairs = []
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a, b = keys[i], keys[j]
+            r = _pearson(series[a], series[b])
+            if r >= min_r:
+                pairs.append({"r": round(r, 3), "a": a, "b": b,
+                              "template_a": text[a]["template"], "template_b": text[b]["template"],
+                              "team_a": text[a]["team"], "team_b": text[b]["team"],
+                              "lines_a": text[a]["lines"], "lines_b": text[b]["lines"],
+                              "co_active_days": len(set(kept[a]) & set(kept[b]))})
+    pairs.sort(key=lambda p: -p["r"])
+    ev.notes += ["Pearson r over log1p(daily counts); high r means the templates rise and fall on the same days.",
+                 "Correlation in time is not proof of cause; templates that always co-occur may be one incident written several ways."]
+    return ev.result({"templates_considered": len(keys), "days": len(days), "pairs": pairs[:top]},
+                     _scope(dataset, start, end))
+
+
+
+# ------------------------------------------------- chain analysis (strict ±1 correlations)
+
+import hashlib
+
+def _daily_series(ev, where, params, min_active_days, min_lines):
+    """Shared daily per-template series for correlation tools."""
+    rows = ev.run("Daily line counts per template",
+                  f"SELECT template_id, CAST(ts AS DATE) AS day, count(*) AS c "
+                  f"FROM events_v WHERE {where} GROUP BY 1, 2", params)
+    names = ev.run("Template texts",
+                   f"SELECT template_id, ANY_VALUE(template) AS template, ANY_VALUE(team) AS team, "
+                   f"count(*) AS lines FROM events_v WHERE {where} GROUP BY 1", params)
+    text = {r["template_id"]: r for r in names}
+    days = sorted({r["day"] for r in rows})
+    per_tpl = {}
+    for r in rows:
+        per_tpl.setdefault(r["template_id"], {})[r["day"]] = r["c"]
+    kept = {t: d for t, d in per_tpl.items()
+            if len(d) >= min_active_days and sum(d.values()) >= min_lines and t in text}
+    return days, kept, text
+
+
+def _cliques(nodes, edges):
+    """Maximal cliques (Bron-Kerbosch) over the strict-correlation graph."""
+    adj = {n: set() for n in nodes}
+    for a, b in edges:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    out = []
+
+    def bk(R, P, X):
+        if not P and not X:
+            if len(R) >= 2:
+                out.append(sorted(R))
+            return
+        pivot = max(P | X, key=lambda v: len(adj.get(v, set()) & P), default=None)
+        for v in list(P - (adj.get(pivot, set()) & P if pivot else set())):
+            bk(R | {v}, P & adj.get(v, set()), X & adj.get(v, set()))
+            P = P - {v}
+            X = X | {v}
+
+    bk(set(), set(adj), set())
+    return out
+
+
+def _chain_id(templates):
+    return "CH-" + hashlib.md5("|".join(sorted(templates)).encode()).hexdigest()[:8]
+
+
+def correlation_chains(dataset: str, start: Optional[str] = None, end: Optional[str] = None,
+                       min_r: float = 0.999, min_repeats: int = 2, top: int = 20):
+    """Candidate chains from strict (+1 / -1) daily correlations. A chain is CONFIRMED only when the
+    same template bundle repeats on >= min_repeats distinct days; otherwise it stays a candidate.
+    Order inside a chain is a timestamp-based PROPOSAL (earliest average first line per episode), not causation."""
+    ev = Evidence("correlation_chains", {"dataset": dataset, "start": start, "end": end,
+                                         "min_r": min_r, "min_repeats": min_repeats})
+    where, params = _filters(dataset=dataset, start=start, end=end)
+    days, kept, text = _daily_series(ev, where, params, min_active_days=5, min_lines=50)
+    keys = sorted(kept)
+    import math
+    series = {t: [math.log1p(kept[t].get(d, 0)) for d in days] for t in keys}
+
+    def pearson(xs, ys):
+        n = len(xs)
+        mx, my = sum(xs) / n, sum(ys) / n
+        cov = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+        vx = sum((a - mx) ** 2 for a in xs) ** 0.5
+        vy = sum((b - my) ** 2 for b in ys) ** 0.5
+        return cov / (vx * vy) if vx and vy else 0.0
+
+    pos, neg = [], []
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            r = pearson(series[keys[i]], series[keys[j]])
+            if r >= min_r:
+                pos.append((keys[i], keys[j], r))
+            elif r <= -min_r:
+                neg.append((keys[i], keys[j], r))
+
+    cliques = _cliques(keys, [(a, b) for a, b, _ in pos])
+    # per-template earliest line per day (for the order proposal)
+    tmin = ev.run("Earliest line per template and day",
+                  f"SELECT template_id, CAST(ts AS DATE) AS day, min(ts) AS first_ts FROM events_v "
+                  f"WHERE {where} GROUP BY 1, 2", params)
+    first_ts = {}
+    for r in tmin:
+        first_ts.setdefault(r["template_id"], {})[r["day"]] = r["first_ts"]
+
+    chains, candidates = [], []
+    for c in cliques:
+        active = [set(kept[t]) for t in c]
+        co_days = sorted(set.intersection(*active))
+        if not co_days:
+            continue
+        import datetime as _dt
+        mid = days[len(days) // 2]
+        first_half = sum(kept[t].get(d, 0) for t in c for d in co_days if d <= mid)
+        second_half = sum(kept[t].get(d, 0) for t in c for d in co_days if d > mid)
+        order_scores = {}
+        for t in c:
+            vals = [first_ts.get(t, {}).get(d) for d in co_days if first_ts.get(t, {}).get(d)]
+            vals = [v if hasattr(v, "hour") else datetime.fromisoformat(str(v)) for v in vals]
+            if vals:
+                order_scores[t] = sum(v.hour * 3600 + v.minute * 60 + v.second for v in vals) / len(vals)
+        order = [t for t, _ in sorted(order_scores.items(), key=lambda kv: kv[1])]
+        info = {
+            "chain_id": _chain_id(c), "size": len(c),
+            "templates": [{"template_id": t, "template": text[t]["template"], "team": text[t]["team"]}
+                          for t in sorted(c)],
+            "order_proposal": order,
+            "episodes": len(co_days), "episode_dates": [str(d) for d in co_days][:top],
+            "lines_total": sum(kept[t].get(d, 0) for t in c for d in co_days),
+            "trend_first_half_lines": first_half, "trend_second_half_lines": second_half,
+        }
+        (chains if len(co_days) >= min_repeats else candidates).append(info)
+    chains.sort(key=lambda x: (-x["episodes"], -x["size"]))
+    candidates.sort(key=lambda x: (-x["episodes"], -x["size"]))
+    neg_out = [{"a": a, "b": b, "r": round(r, 3),
+                "template_a": text[a]["template"], "template_b": text[b]["template"]}
+               for a, b, r in sorted(neg, key=lambda x: x[2])[:top]]
+    ev.notes += [
+        "CONFIRMED chains repeated on >= min_repeats distinct days; candidates did not repeat yet (single-day coincidences).",
+        "order_proposal ranks templates by their average first-line time of day inside episodes — a sequencing hint, NOT causation.",
+        "Negative pairs fire on opposite days (mutual exclusion); they are indicators of distinct regimes, not co-firing chains.",
+        "Correlation uses log1p(daily counts); r >= 0.999 is required for a pair to enter a chain.",
+    ]
+    return ev.result({"templates_considered": len(keys), "days": len(days),
+                      "confirmed_chains": chains[:top], "candidate_chains": candidates[:top],
+                      "negative_pairs": neg_out}, _scope(dataset, start, end))
+
+
+def chain_profile(dataset: str, chain_id: Optional[str] = None, templates: Optional[list] = None,
+                  context_minutes: int = 60, top: int = 10):
+    """First-class profile of one chain event: frequency, trend, episode dates, proposed order and ±context.
+    The chain must be a CONFIRMED one from correlation_chains (same bundle repeated >= 2 days)."""
+    ev = Evidence("chain_profile", {"dataset": dataset, "chain_id": chain_id, "templates": templates})
+    inner = correlation_chains(dataset)
+    ev.queries.extend(inner["queries"])
+    all_chains = inner["data"]["confirmed_chains"]
+    if templates:
+        want = sorted(templates)
+        match = [c for c in all_chains if sorted(t["template_id"] for t in c["templates"]) == want]
+    elif chain_id:
+        match = [c for c in all_chains if c["chain_id"] == chain_id]
+    else:
+        raise ValueError("pass chain_id or templates")
+    if not match:
+        raise ValueError("chain not found among confirmed chains (it may not have repeated yet) — call correlation_chains")
+    ch = match[0]
+    tids = [t["template_id"] for t in ch["templates"]]
+    where, params = _filters(dataset=dataset)
+    ph = ", ".join(["%s"] * len(tids))
+    episodes = ev.run(
+        "Per-episode per-template first line and volume",
+        f"SELECT CAST(ts AS DATE) AS day, template_id, count(*) AS lines, min(ts) AS first_ts "
+        f"FROM events_v WHERE {where} AND template_id IN ({ph}) "
+        f"AND CAST(ts AS DATE) IN ({', '.join(['%s'] * len(ch['episode_dates'][:top]))}) "
+        f"GROUP BY 1, 2 ORDER BY 1, 3 DESC",
+        (*params, *tids, *ch["episode_dates"][:top]))
+    first_day = ch["episode_dates"][0] if ch["episode_dates"] else None
+    ctx_min = int(context_minutes)
+    context = ev.run(
+        f"±{ctx_min} min around the first episode (all levels)",
+        f"SELECT line_id, ts, level, component, source, template_id, content FROM events_v "
+        f"WHERE dataset = %s AND CAST(ts AS DATE) = %s "
+        f"AND ts >= (SELECT min(ts) FROM events_v WHERE dataset = %s AND CAST(ts AS DATE) = %s) - INTERVAL '{ctx_min}' MINUTE "
+        f"AND ts <= (SELECT max(ts) FROM events_v WHERE dataset = %s AND CAST(ts AS DATE) = %s) + INTERVAL '{ctx_min}' MINUTE "
+        f"ORDER BY ts LIMIT 60",
+        (dataset, first_day, dataset, first_day, dataset, first_day))
+    ev.notes += ["The chain is treated as ONE repeated event; all its templates share the same episodes.",
+                 "order_proposal is derived from timestamps (earliest average first line per episode) — sequencing proposal, not causation.",
+                 "Context is a sample from the first episode only (up to 60 lines).",
+                 LINES_NOT_INCIDENTS]
+    return ev.result({"chain_id": ch["chain_id"], "size": ch["size"], "templates": ch["templates"],
+                      "order_proposal": ch["order_proposal"], "frequency": {"episodes": ch["episodes"],
+                      "episode_dates": ch["episode_dates"][:top],
+                      "trend_first_half_lines": ch["trend_first_half_lines"],
+                      "trend_second_half_lines": ch["trend_second_half_lines"]},
+                      "episodes_detail": episodes, "context_sample": context},
+                     f"{dataset}, chain {ch['chain_id']} ({ch['size']} templates)")
+
+
 # ------------------------------------------------------------- tool registry
 
 _DATASET = {"type": "string", "enum": list(DATASETS), "description": "bgl or openstack. Omit for both."}
@@ -619,6 +1026,85 @@ TOOLS = {
                        "by": {"type": "string", "enum": ["pattern", "team"], "description": "Rank patterns (default) or teams."},
                        "top": {"type": "integer", "description": "How many to return (1-15, default 5)."}},
         "required": []}),
+    "get_traceback": (get_traceback, {
+        "description": "Return one complete multi-line exception: finds the 'Traceback (most recent call last)' anchor and all "
+                       "continuation lines (same component, consecutive in log order, within 2 s). Use for OpenStack Python "
+                       "tracebacks where a single error is spread over many lines. Returns {start_line_id, lines, exception_last_line}.",
+        "properties": {"dataset": {**_DATASET, "description": "Dataset of the line."},
+                       "line_id": {"type": "integer", "description": "Any line of the exception, e.g. from search_logs."},
+                       "max_lines": {"type": "integer", "description": "Safety cap on returned lines (default 40)."}},
+        "required": ["dataset", "line_id"]}),
+    "trace_instance": (trace_instance, {
+        "description": "Ordered lifecycle of one entity id (instance, request, tenant or node): every line mentioning it, in time "
+                       "order, plus per-template summary and first/last seen. Use to follow one UUID through the log. "
+                       "Returns {summary, templates, lines}.",
+        "properties": {"dataset": _DATASET,
+                       "instance_id": {"type": "string", "description": "Entity id, at least 8 characters (e.g. an instance or request UUID)."},
+                       "limit": {"type": "integer", "description": "Maximum lines returned (1-100, default 50)."}},
+        "required": ["dataset", "instance_id"]}),
+    "extract_field": (extract_field, {
+        "description": "Extract a structured field that lives inside the message text and summarise it: numeric fields get "
+                       "count/min/max/avg/p50/p95, text fields get the most common values. Fields: latency (OpenStack 'time:'), "
+                       "status (HTTP code), req_id, tenant_id, instance_id. Use when the question needs a value buried in the text. "
+                       "Returns distribution or top values with coverage.",
+        "properties": {"dataset": _DATASET,
+                       "field": {"type": "string", "enum": sorted(FIELDS), "description": "Field to extract."},
+                       "start": _START, "end": _END,
+                       "top": {"type": "integer", "description": "For text fields: how many top values (1-50, default 10)."}},
+        "required": ["dataset", "field"]}),
+    "filter_numeric": (filter_numeric, {
+        "description": "Filter lines by a numeric field extracted from the message text (e.g. latency > 1 s, status >= 500). "
+                       "Numeric fields: latency, status. Returns matching line count, min/max/avg and sample lines. Use for "
+                       "'show me the slow requests' style questions.",
+        "properties": {"dataset": _DATASET,
+                       "field": {"type": "string", "enum": ["latency", "status"], "description": "Numeric field to filter on."},
+                       "op": {"type": "string", "enum": ["<", "<=", ">", ">=", "="], "description": "Comparison operator."},
+                       "value": {"type": "number", "description": "Threshold value."},
+                       "start": _START, "end": _END,
+                       "limit": {"type": "integer", "description": "Maximum sample lines (1-100, default 20)."}},
+        "required": ["dataset", "field", "op", "value"]}),
+    "count_incidents": (count_incidents, {
+        "description": "Collapse line bursts into episodes: one incident = one (source, time bucket) containing >=1 line of a "
+                       "template. Use instead of raw counts when you need 'how many separate times did this fail', per the "
+                       "lines-vs-incidents rule. Returns {total_problem_lines, templates: [{lines, episodes, avg_lines_per_episode}]}.",
+        "properties": {"dataset": _DATASET, "start": _START, "end": _END,
+                       "bucket": {"type": "string", "enum": ["minute", "hour", "day"], "description": "Episode time bucket (default minute)."},
+                       "top": {"type": "integer", "description": "Maximum templates returned (1-50, default 15)."},
+                       "min_lines": {"type": "integer", "description": "Ignore templates with fewer lines (default 2)."}},
+        "required": []}),
+    "correlate_templates": (correlate_templates, {
+        "description": "Which templates fire together: Pearson correlation of daily per-template line counts (log1p-smoothed), "
+                       "returning highly correlated pairs with teams and co-active days. Use for root-cause grouping and "
+                       "'which problems should be investigated as one'. Returns {templates_considered, days, pairs}.",
+        "properties": {"dataset": _DATASET, "start": _START, "end": _END,
+                       "min_r": {"type": "number", "description": "Correlation threshold (0-1, default 0.9)."},
+                       "top": {"type": "integer", "description": "Maximum pairs returned (1-100, default 20)."},
+                       "min_active_days": {"type": "integer", "description": "Ignore templates active on fewer days (default 5)."},
+                       "min_lines": {"type": "integer", "description": "Ignore templates with fewer total lines (default 50)."}},
+        "required": ["dataset"]}),
+    "correlation_chains": (correlation_chains, {
+        "description": "Candidate event CHAINS from strict (+1/-1) daily correlations. A chain is CONFIRMED only when the same "
+                       "template bundle repeats on >= min_repeats distinct days; single-day coincidences stay candidates. Negative "
+                       "pairs (mutual exclusion) are listed separately as regime indicators. Each chain has a timestamp-based "
+                       "order_proposal (sequencing hint, NOT causation). Use after correlate_templates for root-cause grouping. "
+                       "Returns {confirmed_chains, candidate_chains, negative_pairs}.",
+        "properties": {"dataset": _DATASET, "start": _START, "end": _END,
+                       "min_r": {"type": "number", "description": "Strict correlation threshold (default 0.999 ~ +/-1)."},
+                       "min_repeats": {"type": "integer", "description": "Distinct days the bundle must repeat to be confirmed (default 2)."},
+                       "top": {"type": "integer", "description": "Maximum chains returned (1-50, default 20)."}},
+        "required": ["dataset"]}),
+    "chain_profile": (chain_profile, {
+        "description": "First-class profile of one CONFIRMED chain (from correlation_chains): frequency (episodes), episode dates, "
+                       "first-half vs second-half trend, the proposed chain order and a +/-60 min context sample around the first "
+                       "episode. The chain is treated as ONE repeated event with its own attributes. Returns {chain_id, templates, "
+                       "order_proposal, frequency, episodes_detail, context_sample}.",
+        "properties": {"dataset": _DATASET,
+                       "chain_id": {"type": "string", "description": "Chain id from correlation_chains, e.g. 'CH-1a2b3c4d'. Pass this OR templates."},
+                       "templates": {"type": "array", "items": {"type": "string"},
+                                     "description": "Alternative to chain_id: exact template_id list of the chain."},
+                       "context_minutes": {"type": "integer", "description": "Context window around the first episode (default 60)."},
+                       "top": {"type": "integer", "description": "Maximum episodes returned (1-30, default 10)."}},
+        "required": ["dataset"]}),
 }
 
 

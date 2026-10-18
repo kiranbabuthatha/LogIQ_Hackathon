@@ -1,0 +1,64 @@
+# LogIQ one-command stack:  docker compose up --build
+# Web UI:  http://localhost:8000
+# MCP:     http://localhost:8001/mcp  (add to any MCP client as a remote HTTP server)
+services:
+  serenedb:
+    image: serenedb/serenedb:26.09.2
+    ports: ["7890:7890"]
+    environment:
+      POSTGRES_PASSWORD: logiq-dev-password
+    volumes:
+      - serenedb-data:/var/lib/serenedb
+      - ./data:/data
+
+  init:                                  # one-shot: download/parse data, create schema, load corpus
+    image: python:3.12-slim
+    working_dir: /app
+    volumes: [".:/app"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      BGL_SOURCE: /data/BGL.log_structured.csv
+      OPENSTACK_SOURCE: /data/OpenStack.log_structured.csv
+      SERENEDB_DSN: postgresql://postgres:logiq-dev-password@serenedb:7890/postgres
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt &&
+             if [ -z \"$$ANTHROPIC_API_KEY\" ] && [ -z \"$$NVIDIA_API_KEY\" ] && [ -z \"$$LOGIQ_API_KEY\" ]; then
+               echo 'NOTE: no model key found in .env - the UI will start but the agent needs a key. Edit .env, then: docker compose restart app';
+             fi &&
+             python prepare_data.py &&
+             python load.py"
+    depends_on: [serenedb]
+
+  app:                                   # web UI
+    build: .
+    ports: ["8000:8000"]
+    volumes: [".:/app"]
+    working_dir: /app
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SERENEDB_DSN: postgresql://postgres:logiq-dev-password@serenedb:7890/postgres
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    depends_on: [init]
+
+  mcp:                                   # MCP server over HTTP (streamable-http)
+    build: .
+    ports: ["8001:8001"]
+    volumes: [".:/app"]
+    working_dir: /app
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SERENEDB_DSN: postgresql://postgres:logiq-dev-password@serenedb:7890/postgres
+      LOGIQ_MCP_TRANSPORT: streamable-http
+      LOGIQ_MCP_HOST: 0.0.0.0
+      LOGIQ_MCP_PORT: "8001"
+    command: python mcp_server.py
+    depends_on: [init]
+
+volumes:
+  serenedb-data: {}

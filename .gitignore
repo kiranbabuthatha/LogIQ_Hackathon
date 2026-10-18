@@ -1,20 +1,25 @@
 # Allowlist: ignore everything except the files needed to run the project
 *
 !.gitignore
+.env
 !README.md
+!README_v2.md
 !FUNCTIONS.md
-!WORKED_INVESTIGATION.md
 !requirements.txt
 !.env.example
 !tools.py
 !agent.py
 !app.py
 !mcp_server.py
-!worked_investigation.py
 !agent_tools.py
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
 !load.py
 !prepare_data.py
 !sql/
 !sql/schema.sql
 !static/
 !static/index.html
+!worked_investigation/
+!worked_investigation/**

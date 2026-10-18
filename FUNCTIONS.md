@@ -1,6 +1,6 @@
 # LogIQ tool reference
 
-The agent, the web UI ("Explore tools" tab) and the MCP server all call the same 11 functions in [tools.py](tools.py).
+The agent, the web UI ("Explore tools" tab) and the MCP server all call the same 19 functions in [tools.py](tools.py).
 Each one runs parameterised SQL in SereneDB and returns limited, already-calculated results. The agent never writes SQL.
 
 ## Evidence envelope
@@ -67,7 +67,8 @@ Returns the lines around one line, at all levels, each with `seconds_from_target
 **`investigate_event(dataset, line_id, window=10)`**
 A one-call investigation of a single line. It returns:
 - `what_failed`: the line itself, with its component and owning team.
-- `before` / `after`: the lines either side of it.
+- `before` / `after`: the lines either side of it. Each line has `same_source_as_target`, because neighbours in the log are often from other nodes.
+- `context_summary`: how many of those lines come from the same source and how many from others.
 - `recurrence_in_dataset`: lines, sources, active days, and first and last time for the same template.
 - `same_source_problems`: other problem lines from the same source.
 - `candidate_cause`: the nearest earlier problem on the same source, or on any source within 1 hour. This is a lead to check, not proof.
@@ -82,6 +83,18 @@ The whole-dataset history of one template:
 - levels, alert types, components and teams;
 - the busiest sources and the busiest days.
 
+**`get_traceback(dataset, line_id, max_lines=40)`**
+Returns one complete multi-line exception: finds the nearest preceding `Traceback (most recent call last)` anchor in the same component and collects every continuation line (consecutive in log order, within 2 seconds of the anchor). Use whenever a single error is spread over many lines, so the exception can be quoted as one block. Returns `start_line_id`, the `lines`, the final `exception_last_line` and whether it was `truncated` by the cap.
+
+**`trace_instance(dataset, instance_id, limit=50)`**
+Follows one entity id (instance, request, tenant or node) through the whole dataset: every line mentioning it in time order, plus a per-template summary and first/last seen. The id must be at least 8 characters (substring match is a full scan). Use for "what happened to this VM/request?" questions. Returns `summary`, `templates` and the ordered `lines`.
+
+**`extract_field(dataset, field, start?, end?, top=10)`**
+Extracts a structured field that lives inside the message text and summarises it. Numeric fields (`latency` — the OpenStack `time:` value, `status` — the HTTP code) return count, min, max, average, p50 and p95 plus how much of the scope they cover; text fields (`req_id`, `tenant_id`, `instance_id`) return the most common values. Use when a question needs a value buried in free text.
+
+**`filter_numeric(dataset, field, op, value, start?, end?, limit=20)`**
+Filters lines by an extracted numeric field, e.g. `latency > 1` for slow requests or `status >= 500` for server errors. Numeric fields: `latency`, `status`. Returns the matching line count, min/max/avg and sample lines.
+
 ### Team lead: what recurs, how often, who owns it, and is it changing
 
 **`recurring_problems(dataset?, start?, end?, team?, min_lines=2, limit=15)`**
@@ -91,10 +104,24 @@ Lists problem templates that recur in the period, with team, component, lines, a
 A database aggregation grouped by `dataset`, `team`, `component`, `level`, `template`, `alert_type` or `source`. Each group shows its lines, templates, sources, max severity, first and last time, and `share_pct`. The result also includes `total_lines` and `total_groups`, so you can tell when only the top groups are shown.
 
 **`problem_trend(bucket="week", dataset?, start?, end?, team?, component?, template_id?, split_by="team")`**
-Problem lines per `hour`, `day`, `week` or `month`, split by `dataset`, `team`, `component` or `none`. Buckets with no problem lines are left out.
+Problem lines per `hour`, `day`, `week` or `month`, split by `dataset`, `team`, `component`, `severity` or `none`. `template_id` accepts a comma-separated list (e.g. `E19,E20`), so one call can trend a whole set of related templates. Buckets with no problem lines are left out.
 
 **`compare_periods(before_start, before_end, after_start, after_end, dataset?, group_by="template", limit=15)`**
 Problem lines in two periods side by side. Each group gets a `change` and a status: `new`, `gone`, `rising`, `falling` or `flat`. Counts are raw: periods of different lengths are not normalised.
+
+**`count_incidents(dataset?, start?, end?, bucket="minute", top=15, min_lines=2)`**
+Collapses line bursts into episodes: one incident = one (source, time bucket) containing at least one line of a template. Each template gets `lines`, `episodes` and `avg_lines_per_episode`, so "how many separate times did this fail" has an answer that respects the lines-versus-incidents rule. A fault logging 500 lines in one minute counts as 1 episode; the same fault on 12 nodes counts as 12.
+
+**`correlate_templates(dataset, start?, end?, min_r=0.9, top=20, min_active_days=5, min_lines=50)`**
+Which templates fire together: Pearson correlation of daily per-template line counts (log1p-smoothed), returning pairs with `r`, both template texts, owning teams and `co_active_days`. Use for root-cause grouping before the chain tools. Correlation in time is not proof of cause.
+
+### Chain analysis: which events always fire together, and in what order (lead, manager and engineer)
+
+**`correlation_chains(dataset, start?, end?, min_r=0.999, min_repeats=2, top=20)`**
+Builds candidate chains from strict (±1) correlations and groups correlated pairs into maximal cliques. A chain is `confirmed_chains` only when the same template bundle repeats on at least `min_repeats` distinct days; single-day coincidences stay in `candidate_chains`. Pairs with `r <= -min_r` are listed separately as `negative_pairs` (mutual exclusion between regimes). Every chain carries a deterministic `chain_id`, its member templates with teams, an `order_proposal` (templates ranked by their average first-line time of day inside episodes — a sequencing hint, not causation), the episode count and dates, total lines and a first-half/second-half trend.
+
+**`chain_profile(dataset, chain_id | templates, context_minutes=60, top=10)`**
+Treats one confirmed chain as a single repeated event and reports its attributes: frequency (episodes and dates), first-half vs second-half trend, the proposed order, per-episode per-template detail, and a ±`context_minutes` sample around the first episode (all levels, up to 60 lines). Use after `correlation_chains` to answer "tell me about this chain" questions.
 
 ### Manager: what deserves attention first, and who should act
 
