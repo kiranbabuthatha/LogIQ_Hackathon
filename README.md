@@ -38,6 +38,18 @@ You can use LogIQ in three ways: a **web app**, any **MCP client** (Claude Code,
   each explained step by step in [section 1](#1-set-up-method-2--manual-setup). Use it if you prefer not to have Docker manage the
   services, or need fine-grained control (e.g. pointing at your own database instance).
 
+## Free the ports first (if something is already on 7890/8000/8001)
+
+Docker needs all three ports. If a previous run (or another app) still holds one, kill it — one line per OS (example: port 8001):
+
+| OS | Command |
+|---|---|
+| Linux / WSL — simplest | `fuser -k 8001/tcp` |
+| macOS (lsof preinstalled) | `lsof -ti:8001 \| xargs kill -9` |
+| Windows (PowerShell) | `Get-NetTCPConnection -LocalPort 8001 -State Listen \| % { Stop-Process -Id $_.OwningProcess -Force }` |
+
+Repeat with `8000` / `7890` as needed. (`fuser` comes with the `psmisc` package: `sudo apt install psmisc`.)
+
 ## 0. Quick start (Method 1 — Docker)
 
 Docker installed? Then the whole stack — SereneDB, data download/parse/load, web UI and MCP — is one command.
