@@ -106,8 +106,10 @@ The same pipeline answers a team lead with `recurring_problems` + `problem_trend
 
 ### 1. Install
 
-Requirements: Python 3.10+, the connection string of a SereneDB instance, and credentials for one model provider: an
-Anthropic API key, an NVIDIA API key, or a local OpenAI-compatible server (see [Choosing the model provider](#choosing-the-model-provider)).
+Requirements:
+- Python 3.10+
+- Docker, to run SereneDB locally
+- Credentials for one model provider: an Anthropic API key, an NVIDIA API key, or a local OpenAI-compatible server (see [Choosing the model provider](#choosing-the-model-provider))
 
 ```bash
 git clone <repo-url> LogIQ && cd LogIQ
@@ -116,28 +118,114 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure `.env`
+### 2. Start SereneDB and connect to it
+
+SereneDB runs locally; the organisers don't host an instance. It speaks the PostgreSQL protocol, so any PostgreSQL client or
+driver works, including `psycopg`, which LogIQ uses.
+
+**Start it with Docker, setting a password:**
+
+```bash
+docker run -d --name serenedb -p 7890:7890 \
+  -e POSTGRES_PASSWORD=change-me \
+  -v serenedb-data:/var/lib/serenedb \
+  serenedb/serenedb:26.09.2
+```
+
+- `-p 7890:7890` exposes the database port on `localhost:7890`.
+- `-v serenedb-data:/var/lib/serenedb` keeps the data in a Docker volume, so it survives restarts. Leave it off for a throwaway container.
+- `-e POSTGRES_PASSWORD=…` sets the password of the `postgres` superuser when the data volume is first created.
+- `serenedb/serenedb:26.09.2` is the version LogIQ was tested with. Plain `serenedb/serenedb` gives the latest release.
+
+**Why the password matters:** a fresh SereneDB server has one user, `postgres`, with no password, and that user is trusted
+only for connections made *inside* the server's own machine. To SereneDB, connections from your computer into the Docker
+container are network connections, and a user without a password can never log in over the network. So the
+organisers' example `psql -h localhost -p 7890` works inside the container, but LogIQ needs a password. (We tested this
+with `serenedb/serenedb:26.09.2`.)
+
+If your container already runs without a password, set one from inside it. You don't need to recreate it:
+
+```bash
+docker exec -it serenedb psql -h 127.0.0.1 -p 7890 -U postgres -c "ALTER ROLE postgres PASSWORD 'change-me'"
+```
+
+**Manage the container:**
+
+```bash
+docker stop serenedb      # stop (data stays in the volume)
+docker start serenedb     # start again, e.g. after a reboot: the container does not start on its own
+docker ps                 # check that it is running
+```
+
+**Test the connection** from your computer:
+
+```bash
+psql "postgresql://postgres:change-me@localhost:7890/postgres" -c "SELECT version()"
+# or, without psql:
+.venv/bin/python -c "import psycopg; print(psycopg.connect('postgresql://postgres:change-me@localhost:7890/postgres').execute('SELECT version()').fetchone())"
+```
+
+You should see `PostgreSQL 18.3 (SereneDB 26.09.2)` or similar. A GUI client works too. For VS Code SQLTools, install the
+*SQLTools PostgreSQL/Cockroach Driver* and connect to host `localhost`, port `7890`, database `postgres`, user `postgres`
+and your password.
+
+**About local files:** the SereneDB server reads files from *its own* filesystem, so inside Docker it cannot see files on
+your computer. LogIQ handles this for you: `load.py` streams local CSVs to the server with `COPY … FROM STDIN`, so no mount
+is needed. For your own SQL with `read_csv('/data/…')`, mount a folder by adding `-v "$PWD/data":/data` to `docker run`.
+Remote files over HTTP(S) or S3 need no mount.
+
+<details><summary>Troubleshooting the connection</summary>
+
+| Error | Cause | Fix |
+|---|---|---|
+| `connection refused` | Docker or the container isn't running | Start Docker, then `docker start serenedb` |
+| `fe_sendauth: no password supplied` | The DSN has no password | Add the password to `SERENEDB_DSN` |
+| `password authentication failed` | Wrong password, or the user has none yet | Use the right password, or set one with the `ALTER ROLE` command above |
+| `No files found that match the pattern` (in your own SQL) | The server can't see a local path | Mount the folder (`-v "$PWD/data":/data`) or use `load.py`, which streams files |
+| `port is already allocated` on `docker run` | Something else uses port 7890 | Stop it, or map another port (`-p 7891:7890`) and use that port in the DSN |
+
+</details>
+
+### 3. Configure `.env`
 
 ```bash
 cp .env.example .env               # Windows: copy .env.example .env
 ```
 
-Edit `.env`. You always need the database, plus **one** model provider:
+Edit `.env`. You always need the database connection, plus **one** model provider. A working example for the Docker setup
+above, using NVIDIA:
 
 ```
-SERENEDB_DSN=postgresql://user:password@host:port/dbname
-
-# Option A: Claude (default)
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Option B: NVIDIA
+SERENEDB_DSN=postgresql://postgres:change-me@localhost:7890/postgres
 LOGIQ_PROVIDER=nvidia
 NVIDIA_API_KEY=nvapi-...
 ```
 
-`.env` is git-ignored. Never commit it.
+`SERENEDB_DSN` accepts either PostgreSQL connection format:
 
-### 3. Get and load the data
+| Format | Example |
+|---|---|
+| URL | `postgresql://postgres:change-me@localhost:7890/postgres` |
+| Key/value | `host=localhost port=7890 dbname=postgres user=postgres password=change-me` |
+
+In the URL format, special characters in the password must be percent-encoded, for example `@` becomes `%40`. The key/value format needs no encoding.
+
+All settings:
+
+| Setting | Required | What it does |
+|---|---|---|
+| `SERENEDB_DSN` | **yes** | How to connect to SereneDB (see above) |
+| `LOGIQ_PROVIDER` | no | `anthropic` (default), `nvidia`, or `openai` for any OpenAI-compatible server |
+| `ANTHROPIC_API_KEY` *or* `ANTHROPIC_AUTH_TOKEN` | with `anthropic` | Claude credentials; set only one of the two |
+| `NVIDIA_API_KEY` | with `nvidia` | Key from build.nvidia.com |
+| `LOGIQ_BASE_URL`, `LOGIQ_API_KEY` | with `openai` | Server address, e.g. `http://localhost:11434/v1` for Ollama, and its key if it needs one |
+| `LOGIQ_MODEL` | no | Model to use; each provider has a default |
+| `LOGIQ_EFFORT` | no | Claude only: `low` / `medium` (default) / `high` / `xhigh` / `max` |
+| `BGL_SOURCE`, `OPENSTACK_SOURCE` | no | Load data from somewhere other than `data/` (see step 4) |
+
+Credentials for providers you aren't using can stay in the file. `.env` is git-ignored; never commit it.
+
+### 4. Get and load the data
 
 ```bash
 python prepare_data.py     # download + extract + parse the full datasets into data/  (~25 s after download)
@@ -165,11 +253,13 @@ Keep `?download=1` (otherwise Zenodo returns a preview page) and `-L` (Zenodo re
 
 Local files are streamed with `COPY`; URLs are read by SereneDB itself.
 
-The ownership rows in [sql/schema.sql](sql/schema.sql) are **sample data**. Replace them with the organisers' team-ownership
-table, then run `python load.py` again. With the sample rows, the full OpenStack data has two components with no owner:
-`oslo_service.periodic_task` (192 ERROR lines) and `keystonemiddleware.auth_token` (6 lines). They are reported as **unassigned**.
+**Team ownership.** The team-ownership table is part of this repo. It's the `ownership` rows in [sql/schema.sql](sql/schema.sql),
+which map component prefixes to the teams of a fictional platform organisation (for example `KERNEL` → `compute-kernel`,
+`nova.compute` → `compute-core`). To change owners, edit those rows and run `python load.py` again. Two OpenStack
+components currently have no owner and are reported as **unassigned**: `oslo_service.periodic_task` (192 ERROR lines) and
+`keystonemiddleware.auth_token` (6 lines).
 
-### 4. Start the web app
+### 5. Start the web app
 
 ```bash
 uvicorn app:app --port 8000
@@ -178,7 +268,7 @@ uvicorn app:app --port 8000
 Open **http://127.0.0.1:8000**. The header shows the loaded data (lines, problem lines, date range per dataset) and the
 agent status. **Agent ready · <model>** means it's configured. If you see **Agent offline**, the banner says which setting is missing.
 
-### 5. Ask a question (tab: *Ask the agent*)
+### 6. Ask a question (tab: *Ask the agent*)
 
 1. **Pick a role card:** Engineer, Team lead or Manager. Each card shows what that role gets.
 2. **Ask:** click one of the example questions, or type your own and press **Ask** (or Ctrl/⌘ + Enter).
@@ -200,7 +290,7 @@ Tips for good answers:
 - **Name the dataset** (BGL or OpenStack) when you mean one.
 - For engineers, **quote the error text** you saw; it goes straight into full-text search.
 
-### 6. Run tools yourself (tab: *Explore tools*)
+### 7. Run tools yourself (tab: *Explore tools*)
 
 1. Choose a tool from the list; its description explains what it does.
 2. Fill in the form. Fields marked `*` are required, and the rest are optional filters.
@@ -208,26 +298,15 @@ Tips for good answers:
 
 This tab needs no model or API key. It's useful for checking an agent's claim, or exploring the data directly.
 
-### 7. See the whole corpus (tab: *Corpus & teams*)
+### 8. See the whole corpus (tab: *Corpus & teams*)
 
 Whole-corpus counts calculated in SereneDB: lines, problem lines, alerts and time span per dataset, problem lines per team,
 and lines per level.
 
 ### Other ways to use it
 
-**From Claude Code or Claude Desktop (MCP).** The same 11 tools, with Claude as the agent:
-
-```bash
-claude mcp add logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"
-```
-
-For Claude Desktop, add this to `claude_desktop_config.json`:
-
-```json
-{"mcpServers": {"logiq": {"command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"]}}}
-```
-
-Then ask, for example: *"Using logiq, which recurring problems in BGL should the job-runtime team look at first?"*
+**From your own AI assistant (MCP).** The same 11 tools in Claude Code, Claude Desktop, Codex, Cursor, VS Code or any other
+MCP client, with that client's model as the agent. See [Use LogIQ from any MCP client](#use-logiq-from-any-mcp-client-any-llm) below.
 
 **From the terminal.** One question, with the tool calls and answer printed:
 
@@ -242,6 +321,143 @@ python agent.py manager "What should we prioritise across BGL and OpenStack?"
 ```bash
 python worked_investigation.py      # writes WORKED_INVESTIGATION.md
 ```
+
+### Use LogIQ from any MCP client (any LLM)
+
+[`mcp_server.py`](mcp_server.py) exposes LogIQ's 11 tools over the Model Context Protocol (MCP). Your MCP client starts it as
+a local program (stdio transport: there is no port or URL), lists the tools, and **your client's own model** decides which
+tools to call. You can use Claude, GPT, Gemini, or a local model, whatever your client runs.
+
+Things to know first:
+- **No model key in `.env` is needed for MCP.** The model belongs to your client; LogIQ only needs `SERENEDB_DSN`.
+- **The web app's role prompts don't apply here.** Your client's model sees the tool descriptions and short server instructions, not the Engineer / Team lead / Manager prompts. Say the role and what you want in your question; see the examples below.
+- **Use absolute paths in client configs.** Clients start the server from their own folder.
+
+#### Before you start
+
+1. SereneDB is running: `docker start serenedb` (see step 2).
+2. The data is loaded: `python load.py` (see step 4).
+3. `.env` in the project folder has a working `SERENEDB_DSN`. The server finds `.env` itself, wherever the client starts it.
+4. You know your two absolute paths. Run this in the project folder:
+
+   ```bash
+   echo "$PWD/.venv/bin/python"   # the command
+   echo "$PWD/mcp_server.py"      # its argument
+   ```
+
+   On Windows they are `C:\path\to\LogIQ\.venv\Scripts\python.exe` and `C:\path\to\LogIQ\mcp_server.py`. In JSON, write
+   backslashes as `\\` or use forward slashes.
+
+Below, replace `/abs/path/LogIQ` with your project folder.
+
+#### Set up your client
+
+**Claude Code** (✔ tested). Run in the project folder:
+
+```bash
+claude mcp add logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"              # this project only
+claude mcp add --scope user logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"  # or: every folder
+claude mcp list                                                                    # expect: logiq … ✔ Connected
+```
+
+Inside Claude Code, `/mcp` shows the server and its tools. Claude Code asks permission the first time each tool runs. For
+non-interactive runs, allow the tools explicitly:
+`claude -p "…" --allowedTools "mcp__logiq__*"`.
+
+**Claude Desktop** (config validated). Open Settings → Developer → Edit Config, or edit the file directly:
+macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json`.
+Add `logiq` inside `mcpServers`, keeping any servers already there, then fully quit and reopen Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "logiq": {
+      "command": "/abs/path/LogIQ/.venv/bin/python",
+      "args": ["/abs/path/LogIQ/mcp_server.py"]
+    }
+  }
+}
+```
+
+**Codex CLI** (untested). Either run
+
+```bash
+codex mcp add logiq -- /abs/path/LogIQ/.venv/bin/python /abs/path/LogIQ/mcp_server.py
+```
+
+or add this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.logiq]
+command = "/abs/path/LogIQ/.venv/bin/python"
+args = ["/abs/path/LogIQ/mcp_server.py"]
+```
+
+**Cursor** (untested). Add to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (this project), then enable `logiq` under Settings → MCP:
+
+```json
+{ "mcpServers": { "logiq": { "command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"] } } }
+```
+
+**VS Code with GitHub Copilot, agent mode** (untested). Add to `.vscode/mcp.json` in your workspace. Note the key is `servers`:
+
+```json
+{ "servers": { "logiq": { "type": "stdio", "command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"] } } }
+```
+
+**Gemini CLI** (untested). Add to `~/.gemini/settings.json`:
+
+```json
+{ "mcpServers": { "logiq": { "command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"] } } }
+```
+
+**Any other MCP client.** Add a **stdio** server with these settings:
+
+| Setting | Value |
+|---|---|
+| Name | `logiq` |
+| Command | `/abs/path/LogIQ/.venv/bin/python` |
+| Arguments | `/abs/path/LogIQ/mcp_server.py` |
+| Environment | none needed (it reads `.env`) |
+
+"Untested" means we couldn't try that client here. Its config format comes from the client's documentation at the time of
+writing; check that documentation if a step doesn't match.
+
+#### Check the server without any LLM
+
+The official [MCP Inspector](https://github.com/modelcontextprotocol/inspector) talks to the server directly (✔ tested; needs Node.js):
+
+```bash
+npx -y @modelcontextprotocol/inspector --cli /abs/path/LogIQ/.venv/bin/python /abs/path/LogIQ/mcp_server.py --method tools/list
+npx -y @modelcontextprotocol/inspector --cli /abs/path/LogIQ/.venv/bin/python /abs/path/LogIQ/mcp_server.py \
+    --method tools/call --tool-name corpus_overview
+```
+
+The first command should list the 11 tools; the second should return the line counts per dataset. Drop `--cli` to open the
+Inspector's web interface and call tools by hand.
+
+#### Ask role-specific questions
+
+Mention LogIQ so the model uses the tools, and say who you are, since the role prompts aren't applied over MCP:
+
+| Role | Example question |
+|---|---|
+| Engineer | *Using logiq, I'm an engineer: what is behind the "Link has been severed" errors in BGL after September 2005? Show the failing lines, what happened just before, a possible cause labelled as a hypothesis, and the next check.* |
+| Team lead | *Using logiq, as a team lead: which problems recur most in BGL over the whole period, which teams own them, and what should we investigate first? Give counts and trends.* |
+| Manager | *Using logiq, as a manager: what are the top 3 risks across BGL and OpenStack, who should own each, and what does the data not tell us? Don't speculate about downtime or cost.* |
+
+Each tool result carries its SQL, filters and row counts. Ask the model to *"show the queries behind each number"* if you want the evidence.
+
+#### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Client shows `logiq` as failed / not connected | Wrong path, or Python packages not installed in `.venv` | Run the command and argument from *Before you start* by hand. It should wait silently; stop it with Ctrl+C. If it prints an error, fix that first (e.g. `pip install -r requirements.txt`). |
+| Tools appear, but every call fails with `database error … Check that SereneDB is running` | SereneDB is stopped, or `SERENEDB_DSN` is wrong | `docker start serenedb`; check the DSN (step 3) |
+| Calls fail with `database error (UndefinedTable): Table with name events_v does not exist!` | Data not loaded | `python load.py` |
+| `invalid arguments: …` | The model sent a bad argument | Nothing to fix: the message goes back to the model, which can retry |
+| The model answers without calling tools | It didn't recognise that the tools apply | Start the question with *"Using logiq, …"* |
+| No tools listed after editing a config file | The client hasn't reloaded | Restart the client completely |
 
 ### Choosing the model provider
 
@@ -327,12 +543,15 @@ agent_tools.py          small CLI for raw-table inspection (not used by the agen
 - **Our own templates.** The Zenodo archives contain raw logs only, so `prepare_data.py` derives templates by masking variable tokens, not with Loghub's Drain parser. Template ids (`E1`…) therefore differ from the ids in Loghub's 2k samples. Masking can also merge messages that differ only in variable words, or split messages whose wording varies.
 - **OpenStack anomaly labels are not used.** `anomaly_labels.txt` names 4 VM instances with injected anomalies, but the labels are per instance, not per line, so they aren't mapped to `is_alert`. To look at them, search for an instance id, e.g. `search_logs("544fd51c-4edc-4780-baae-ba1d80a0acfc")`.
 - **OpenStack line order.** The three OpenStack files are merged and numbered in timestamp order, so neighbouring `line_id`s can come from different log files. Use `get_nearby_events(minutes=…, same_source=true)` to stay within one file.
-- **Sample ownership table.** Team names come from the sample rows in `sql/schema.sql` until the organisers' table replaces them.
+- **Fictional ownership.** Teams come from the `ownership` table in `sql/schema.sql`, which describes a fictional organisation. Two OpenStack components are unassigned (see step 4).
 - **Heuristics, not root causes.** `candidate_cause` (the nearest earlier problem on the same source, or any source within 1 hour), `lift`, trend labels (a 1.5× change between the halves of the period; "single burst" when every line falls within 5% of it) and `priority_score` are simple, documented rules. They point to where to look; they don't prove a cause.
 - **Lines are not incidents.** No tool groups lines into incidents. `active_hours` and `active_days` are rough proxies for separate episodes.
 - **Timestamps** are as recorded in each log, with no timezone conversion. BGL and OpenStack cover different years, so trends are computed per dataset.
 - **Web UI** has no login, and keeps conversations in memory, so a restart clears them. Run it locally or behind your own access control.
-- **Not implemented:** on-demand indexing, the OpenTelemetry Parquet data, and row-level security per role.
+- **Not implemented:** on-demand indexing, the OpenTelemetry Parquet data, and row-level security per role. These are optional extras, judged separately from the main score.
+  - **Reading the OpenTelemetry data in place works.** SereneDB queries the public Parquet files over HTTPS with no download: `SELECT * FROM read_parquet('https://public-pme.s3.eu-west-3.amazonaws.com/text_bench/part_000.parquet') LIMIT 10`.
+  - **Measured on this setup, for one file (1,000,000,000 rows):** the schema took 1.5 s, the row count 0.2 s, and sample rows 0.8 s. A full aggregation (lines per service and severity) took **132 s**, which is too slow to run on every agent question.
+  - **The path forward:** a view over the files plus an inverted index on a chosen time window (`CREATE INDEX … USING inverted` on the view, refreshed with `REINDEX INDEX`), or a summary table built once.
 
 ### Data and citation
 
