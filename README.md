@@ -28,7 +28,15 @@ You can use LogIQ in three ways: a **web app**, any **MCP client** (Claude Code,
 
 ---
 
-## Quick start
+## Two ways to install
+
+- **Method 1 — Docker (recommended).** The [Quick start](#quick-start) below: one command starts everything —
+  database, data download/parse/load, web UI and the MCP server. No Python or SereneDB installation on your machine.
+- **Method 2 — manual.** Virtual environment + a separately started SereneDB container + explicit load commands,
+  each explained step by step in [section 1](#1-set-up-everyone). Use it if you prefer not to have Docker manage the
+  services, or need fine-grained control (e.g. pointing at your own database instance).
+
+## Quick start (Method 1 — Docker)
 
 Docker installed? Then the whole stack — SereneDB, data download/parse/load, web UI and MCP — is one command.
 First run takes ~10 minutes (770 MB download, parse, load); watch progress with `docker compose logs -f init`.
@@ -46,15 +54,6 @@ Then:
 - **Stop / reset:** `docker compose down` (keeps data) · `docker compose down -v` (fresh start)
 
 ---
-
-## Two ways to install
-
-- **Method 1 — Docker (the Quick start above, recommended).** One command starts everything: database, data
-  download/parse/load, web UI and the MCP server. No Python or SereneDB installation on your machine.
-
-- **Method 2 — manual (section 1).** Virtual environment + a separately started SereneDB container + explicit
-  load commands, each explained step by step. Use it if you prefer not to have Docker manage the services, or
-  need fine-grained control (e.g. pointing at your own database instance).
 
 ## Add the MCP server to your client (Method 1 — Docker stack running)
 
