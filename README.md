@@ -305,19 +305,8 @@ and lines per level.
 
 ### Other ways to use it
 
-**From Claude Code or Claude Desktop (MCP).** The same 11 tools, with Claude as the agent:
-
-```bash
-claude mcp add logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"
-```
-
-For Claude Desktop, add this to `claude_desktop_config.json`:
-
-```json
-{"mcpServers": {"logiq": {"command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"]}}}
-```
-
-Then ask, for example: *"Using logiq, which recurring problems in BGL should the job-runtime team look at first?"*
+**From your own AI assistant (MCP).** The same 11 tools in Claude Code, Claude Desktop, Codex, Cursor, VS Code or any other
+MCP client, with that client's model as the agent. See [Use LogIQ from any MCP client](#use-logiq-from-any-mcp-client-any-llm) below.
 
 **From the terminal.** One question, with the tool calls and answer printed:
 
@@ -332,6 +321,143 @@ python agent.py manager "What should we prioritise across BGL and OpenStack?"
 ```bash
 python worked_investigation.py      # writes WORKED_INVESTIGATION.md
 ```
+
+### Use LogIQ from any MCP client (any LLM)
+
+[`mcp_server.py`](mcp_server.py) exposes LogIQ's 11 tools over the Model Context Protocol (MCP). Your MCP client starts it as
+a local program (stdio transport: there is no port or URL), lists the tools, and **your client's own model** decides which
+tools to call. You can use Claude, GPT, Gemini, or a local model, whatever your client runs.
+
+Things to know first:
+- **No model key in `.env` is needed for MCP.** The model belongs to your client; LogIQ only needs `SERENEDB_DSN`.
+- **The web app's role prompts don't apply here.** Your client's model sees the tool descriptions and short server instructions, not the Engineer / Team lead / Manager prompts. Say the role and what you want in your question; see the examples below.
+- **Use absolute paths in client configs.** Clients start the server from their own folder.
+
+#### Before you start
+
+1. SereneDB is running: `docker start serenedb` (see step 2).
+2. The data is loaded: `python load.py` (see step 4).
+3. `.env` in the project folder has a working `SERENEDB_DSN`. The server finds `.env` itself, wherever the client starts it.
+4. You know your two absolute paths. Run this in the project folder:
+
+   ```bash
+   echo "$PWD/.venv/bin/python"   # the command
+   echo "$PWD/mcp_server.py"      # its argument
+   ```
+
+   On Windows they are `C:\path\to\LogIQ\.venv\Scripts\python.exe` and `C:\path\to\LogIQ\mcp_server.py`. In JSON, write
+   backslashes as `\\` or use forward slashes.
+
+Below, replace `/abs/path/LogIQ` with your project folder.
+
+#### Set up your client
+
+**Claude Code** (✔ tested). Run in the project folder:
+
+```bash
+claude mcp add logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"              # this project only
+claude mcp add --scope user logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"  # or: every folder
+claude mcp list                                                                    # expect: logiq … ✔ Connected
+```
+
+Inside Claude Code, `/mcp` shows the server and its tools. Claude Code asks permission the first time each tool runs. For
+non-interactive runs, allow the tools explicitly:
+`claude -p "…" --allowedTools "mcp__logiq__*"`.
+
+**Claude Desktop** (config validated). Open Settings → Developer → Edit Config, or edit the file directly:
+macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json`.
+Add `logiq` inside `mcpServers`, keeping any servers already there, then fully quit and reopen Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "logiq": {
+      "command": "/abs/path/LogIQ/.venv/bin/python",
+      "args": ["/abs/path/LogIQ/mcp_server.py"]
+    }
+  }
+}
+```
+
+**Codex CLI** (untested). Either run
+
+```bash
+codex mcp add logiq -- /abs/path/LogIQ/.venv/bin/python /abs/path/LogIQ/mcp_server.py
+```
+
+or add this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.logiq]
+command = "/abs/path/LogIQ/.venv/bin/python"
+args = ["/abs/path/LogIQ/mcp_server.py"]
+```
+
+**Cursor** (untested). Add to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (this project), then enable `logiq` under Settings → MCP:
+
+```json
+{ "mcpServers": { "logiq": { "command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"] } } }
+```
+
+**VS Code with GitHub Copilot, agent mode** (untested). Add to `.vscode/mcp.json` in your workspace. Note the key is `servers`:
+
+```json
+{ "servers": { "logiq": { "type": "stdio", "command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"] } } }
+```
+
+**Gemini CLI** (untested). Add to `~/.gemini/settings.json`:
+
+```json
+{ "mcpServers": { "logiq": { "command": "/abs/path/LogIQ/.venv/bin/python", "args": ["/abs/path/LogIQ/mcp_server.py"] } } }
+```
+
+**Any other MCP client.** Add a **stdio** server with these settings:
+
+| Setting | Value |
+|---|---|
+| Name | `logiq` |
+| Command | `/abs/path/LogIQ/.venv/bin/python` |
+| Arguments | `/abs/path/LogIQ/mcp_server.py` |
+| Environment | none needed (it reads `.env`) |
+
+"Untested" means we couldn't try that client here. Its config format comes from the client's documentation at the time of
+writing; check that documentation if a step doesn't match.
+
+#### Check the server without any LLM
+
+The official [MCP Inspector](https://github.com/modelcontextprotocol/inspector) talks to the server directly (✔ tested; needs Node.js):
+
+```bash
+npx -y @modelcontextprotocol/inspector --cli /abs/path/LogIQ/.venv/bin/python /abs/path/LogIQ/mcp_server.py --method tools/list
+npx -y @modelcontextprotocol/inspector --cli /abs/path/LogIQ/.venv/bin/python /abs/path/LogIQ/mcp_server.py \
+    --method tools/call --tool-name corpus_overview
+```
+
+The first command should list the 11 tools; the second should return the line counts per dataset. Drop `--cli` to open the
+Inspector's web interface and call tools by hand.
+
+#### Ask role-specific questions
+
+Mention LogIQ so the model uses the tools, and say who you are, since the role prompts aren't applied over MCP:
+
+| Role | Example question |
+|---|---|
+| Engineer | *Using logiq, I'm an engineer: what is behind the "Link has been severed" errors in BGL after September 2005? Show the failing lines, what happened just before, a possible cause labelled as a hypothesis, and the next check.* |
+| Team lead | *Using logiq, as a team lead: which problems recur most in BGL over the whole period, which teams own them, and what should we investigate first? Give counts and trends.* |
+| Manager | *Using logiq, as a manager: what are the top 3 risks across BGL and OpenStack, who should own each, and what does the data not tell us? Don't speculate about downtime or cost.* |
+
+Each tool result carries its SQL, filters and row counts. Ask the model to *"show the queries behind each number"* if you want the evidence.
+
+#### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Client shows `logiq` as failed / not connected | Wrong path, or Python packages not installed in `.venv` | Run the command and argument from *Before you start* by hand. It should wait silently; stop it with Ctrl+C. If it prints an error, fix that first (e.g. `pip install -r requirements.txt`). |
+| Tools appear, but every call fails with `database error … Check that SereneDB is running` | SereneDB is stopped, or `SERENEDB_DSN` is wrong | `docker start serenedb`; check the DSN (step 3) |
+| Calls fail with `database error (UndefinedTable): Table with name events_v does not exist!` | Data not loaded | `python load.py` |
+| `invalid arguments: …` | The model sent a bad argument | Nothing to fix: the message goes back to the model, which can retry |
+| The model answers without calling tools | It didn't recognise that the tools apply | Start the question with *"Using logiq, …"* |
+| No tools listed after editing a config file | The client hasn't reloaded | Restart the client completely |
 
 ### Choosing the model provider
 
