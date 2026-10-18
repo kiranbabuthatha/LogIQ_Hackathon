@@ -27,7 +27,8 @@ import psycopg
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
-load_dotenv()
+from pathlib import Path
+load_dotenv(Path(__file__).resolve().parent / ".env")
 DSN = os.environ["SERENEDB_DSN"]
 
 DATASETS = ("bgl", "openstack")
