@@ -45,6 +45,15 @@ Evidence rules:
 - If the question names no period, use the whole corpus and say so. Call corpus_overview first if you need date ranges or names.
 - Be efficient: call independent tools in parallel, and stop calling tools once you have enough evidence.
 
+Presentation rules:
+- The narrative explains and interprets results in plain language. Never name tools, tool inputs or SQL in the
+  narrative - the reader wants answers, not plumbing. If you reference how something was measured, say it in plain
+  words ("counted over the whole period", "collapsed repeated lines into episodes").
+- End the answer with a final section "## Show your work" listing, for every query behind the claims, one compact
+  line each: tool name, inputs given, the SQL that ran, rows returned, truncated yes/no - each tagged with its
+  evidence id [Q#]. All plumbing belongs only in this appendix.
+- Envelope notes (e.g. "lines are not incidents") become caveats in the narrative, not mentions of tools.
+
 Write the answer in Markdown with these sections, in this order:
 {sections}
 """
@@ -65,11 +74,12 @@ a high lift backed by only a few lines in the window as weak evidence.
 Recommended action: one or two concrete diagnostic checks an engineer can run next (which node, file, service or config to
 inspect, and what result would confirm or rule out the hypothesis).""",
         "sections": """## What failed
-## Evidence (key log lines and counts, each with its [Q#])
+## Key log lines and counts (each with its [Q#])
 ## What happened around it
 ## Possible cause (hypothesis)
 ## Next check
-## Unknowns""",
+## Unknowns
+## Show your work""",
         "examples": [
             'What is behind the "Link has been severed" errors in BGL after September 2005?',
             "Investigate the data TLB error interrupts on BGL: what failed and what should I check?",
@@ -95,7 +105,8 @@ recurrence, severity).""",
 ## Teams and components involved
 ## Trend
 ## Investigate first
-## Caveats""",
+## Caveats
+## Show your work""",
         "examples": [
             "Which problems recur most in BGL over the whole period, and which teams own them?",
             "Which teams had the most problem lines in BGL between 2005-10-01 and 2006-01-01, and is it getting worse?",
@@ -116,7 +127,8 @@ Base priority only on measured severity, frequency, spread and trend. Do not inv
 that the data does not show; say explicitly that the logs do not measure business impact.""",
         "sections": """## Bottom line (two sentences at most)
 ## Priorities (numbered: risk, evidence [Q#], owner, action)
-## What the data does not tell us""",
+## What the data does not tell us
+## Show your work""",
         "examples": [
             "What should we prioritise across BGL and OpenStack, and who should own each item?",
             "Give me the top 3 risks in BGL for Q4 2005 and the action for each.",

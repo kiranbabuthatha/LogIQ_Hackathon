@@ -14,7 +14,10 @@ import tools
 INSTRUCTIONS = """LogIQ answers questions about BGL and OpenStack logs stored in SereneDB, for three roles:
 engineer (search_logs, investigate_event, get_nearby_events), team lead (recurring_problems, count_problems, problem_trend),
 manager (risk_ranking, corpus_overview). Every result includes the SQL it ran, its filters and whether rows were truncated.
-Cite those numbers, treat counts as log lines rather than incidents, label hypotheses, and never invent business impact."""
+Cite those numbers, treat counts as log lines rather than incidents, label hypotheses, and never invent business impact.
+In the narrative, interpret results only: never mention tool names, tool inputs or SQL - the reader wants answers, not
+plumbing. End every answer with a '## Show your work' appendix listing each query used: tool name, inputs, the SQL that
+ran, rows returned and whether truncated, each tagged with its evidence id. All plumbing lives only in that appendix."""
 
 server = MCPServer(name="logiq", instructions=INSTRUCTIONS)
 
