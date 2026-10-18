@@ -11,6 +11,7 @@ Model provider (LOGIQ_PROVIDER in .env):
 import json
 import os
 import re
+import time
 
 import anthropic
 import openai
@@ -177,8 +178,9 @@ def _betas():
 
 
 def _tidy(text):
-    """Remove <think> reasoning some models emit, and normalise citation brackets such as 【Q2】 or (Q2) to [Q2]."""
+    """Remove <think> reasoning some models emit, and normalise citations such as 【Q2】, 【Q2†L13-L16】 or (Q2) to [Q2]."""
     text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S)
+    text = re.sub(r"(Q\d+)†[^】\]),，、\s]*", r"\1", text)  # drop line-range suffixes: Q2†L13-L16 -> Q2
     return re.sub(r"[【\[(（]\s*(Q\d+(?:\s*[,，、]\s*Q\d+)*)\s*[】\])）]",
                   lambda m: "[" + re.sub(r"\s*[,，、]\s*", ", ", m.group(1)) + "]", text).strip()
 
@@ -298,8 +300,16 @@ def _run_openai(session, question):
     for step in range(MAX_STEPS):
         yield {"type": "status", "text": "Thinking…" if step == 0 else "Reading the evidence…"}
         try:
-            response = client.chat.completions.create(model=MODEL, messages=session.messages, tools=_openai_tools(),
-                                                      tool_choice="auto", temperature=0.2, max_tokens=4096)
+            for wait in (5, 15, None):  # hosted endpoints sometimes return 5xx; the SDK's own quick retries aren't enough
+                try:
+                    response = client.chat.completions.create(model=MODEL, messages=session.messages, tools=_openai_tools(),
+                                                              tool_choice="auto", temperature=0.2, max_tokens=4096)
+                    break
+                except (openai.InternalServerError, openai.APIConnectionError) as e:
+                    if wait is None:
+                        raise
+                    yield {"type": "status", "text": f"{PROVIDER} returned a temporary error; retrying in {wait}s…"}
+                    time.sleep(wait)
         except (openai.AuthenticationError, openai.PermissionDeniedError):  # NVIDIA answers a bad key with 403
             yield {"type": "error", "text": f"{PROVIDER} rejected the API key. Check it in .env (and that it can use {MODEL}), "
                                             "then restart the server."}

@@ -8,6 +8,7 @@ import psycopg
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+import agent
 import tools
 
 INSTRUCTIONS = """LogIQ answers questions about BGL and OpenStack logs stored in SereneDB, for three roles:
@@ -38,6 +39,23 @@ for name, (fn, spec) in tools.TOOLS.items():
     server.add_tool(_report_errors(fn), name=name,
                     description=spec["description"] + (f"\n\nParameters:{params}" if params else ""),
                     structured_output=False)
+
+# Role prompts: the same instructions the web app's agent uses, so MCP users get the same role behaviour.
+# In Claude Code they appear as /mcp__logiq__engineer, /mcp__logiq__team_lead and /mcp__logiq__manager.
+MCP_NOTE = ("Tool results in this session carry no evidence_id: number your LogIQ tool calls Q1, Q2, … in the order you "
+            "make them, cite those ids, and list each id with its tool and arguments at the end of the answer.")
+
+
+def _role_prompt(role):
+    def prompt(question: str) -> str:
+        return f"{agent.system_prompt(role)}\n{MCP_NOTE}\n\nQuestion: {question}"
+    return prompt
+
+
+for role, spec in agent.ROLES.items():
+    server.prompt(name=role, title=f"LogIQ: {spec['label']}",
+                  description=f"{spec['goal']} Uses LogIQ's tools with the {spec['label'].lower()} instructions and "
+                              f"evidence rules. Example: {spec['examples'][0]}")(_role_prompt(role))
 
 if __name__ == "__main__":
     server.run()

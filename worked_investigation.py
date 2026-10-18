@@ -42,37 +42,69 @@ def main():
         md.append(f"| {d['dataset']} | {d['lines']:,} | {d['problem_lines']:,} | {d['labelled_alerts']:,} | {d['first_ts']} | {d['last_ts']} |")
     md.append("\nA *problem line* has severity ≥ WARNING or a BGL expert alert label. Counts are log lines, not incidents.\n")
 
+    failed = []
     for role, question in QUESTIONS.items():
         label = agent.ROLES[role]["label"]
-        print(f"[{label}] {question}")
-        md += [f"\n---\n\n## {label}\n", f"**Question:** {question}\n", "### Tool calls and evidence\n"]
-        answer, calls = "", {}
-        for ev in agent.run(agent.Session(role), question):
-            if ev["type"] == "tool_call":
-                calls[ev["id"]] = ev
-                print(f"  {ev['id']} {ev['name']}")
-            elif ev["type"] == "tool_result":
-                c = calls[ev["id"]]
-                md.append(f"#### {ev['id']} · `{c['name']}({json.dumps(c['input'])})`\n")
-                if "error" in ev:
-                    md.append(f"Error returned to the agent: `{ev['error']}`\n")
-                    continue
-                env = ev["envelope"]
-                md.append(f"Scope: {env['scope']}\n")
-                for q in env["queries"]:
-                    md.append(f"- {q['purpose']}: {q['rows_returned']} rows{' (truncated)' if q['truncated'] else ''}\n"
-                              f"  ```sql\n  {q['sql']}\n  ```\n  params: `{json.dumps(q['params'], default=str)}`")
-                if env["notes"]:
-                    md.append("\nNotes: " + " ".join(env["notes"]))
-                md.append(f"\n<details><summary>Result (first rows)</summary>\n\n```json\n{_rows_preview(env['data'])}\n```\n</details>\n")
-            elif ev["type"] == "answer":
-                answer = ev["text"]
-            elif ev["type"] == "error":
-                answer = f"**Error:** {ev['text']}"
-            elif ev["type"] == "done":
-                u = ev["usage"]
-                md.append(f"_{u['model_calls']} model calls, {u['input_tokens']:,} input / {u['output_tokens']:,} output tokens._\n")
-        md += ["### Answer\n", answer, ""]
+        for attempt in range(1, ATTEMPTS + 1):
+            print(f"[{label}] attempt {attempt}: {question}")
+            section, error = run_role(role, question)
+            if not error:
+                break
+            print(f"  failed: {error}")
+        if error:
+            failed.append(f"{label}: {error}")
+        md += [f"\n---\n\n## {label}\n", f"**Question:** {question}\n", *section]
+
+    md += ["\n---\n\n## What the data does and does not establish\n",
+           "- Established: line counts, time spans, sources and owning teams for each pattern, computed in SereneDB over the loaded corpus.",
+           "- Not established: root causes (candidate causes and lift are co-occurrence only), whether lines are separate incidents, "
+           "and any downtime, user or cost impact, which the logs do not contain.",
+           "- Team ownership comes from the `ownership` table loaded by `sql/schema.sql`."]
+    out = Path(__file__).with_name("WORKED_INVESTIGATION.md" if not failed else "WORKED_INVESTIGATION.failed.md")
+    out.write_text("\n".join(md))
+    if failed:  # never leave a half-finished deliverable in place of a good one
+        print(f"FAILED for {len(failed)} role(s); wrote {out.name} for inspection, WORKED_INVESTIGATION.md left unchanged:")
+        print("\n".join(f"  {f}" for f in failed))
+        return 1
+    print(f"wrote {out.name}")
+    return 0
+
+
+ATTEMPTS = 3
+
+
+def run_role(role, question):
+    """Run one role's question through the agent. Returns (markdown lines, error text or None)."""
+    md, answer, calls, error = ["### Tool calls and evidence\n"], "", {}, None
+    for ev in agent.run(agent.Session(role), question):
+        if ev["type"] == "tool_call":
+            calls[ev["id"]] = ev
+            print(f"  {ev['id']} {ev['name']}")
+        elif ev["type"] == "tool_result":
+            c = calls[ev["id"]]
+            md.append(f"#### {ev['id']} · `{c['name']}({json.dumps(c['input'])})`\n")
+            if "error" in ev:
+                md.append(f"Error returned to the agent: `{ev['error']}`\n")
+                continue
+            env = ev["envelope"]
+            md.append(f"Scope: {env['scope']}\n")
+            for q in env["queries"]:
+                md.append(f"- {q['purpose']}: {q['rows_returned']} rows{' (truncated)' if q['truncated'] else ''}\n"
+                          f"  ```sql\n  {q['sql']}\n  ```\n  params: `{json.dumps(q['params'], default=str)}`")
+            if env["notes"]:
+                md.append("\nNotes: " + " ".join(env["notes"]))
+            md.append(f"\n<details><summary>Result (first rows)</summary>\n\n```json\n{_rows_preview(env['data'])}\n```\n</details>\n")
+        elif ev["type"] == "answer":
+            answer = ev["text"]
+        elif ev["type"] == "error":
+            error = ev["text"]
+        elif ev["type"] == "done":
+            u = ev["usage"]
+            md.append(f"_{u['model_calls']} model calls, {u['input_tokens']:,} input / {u['output_tokens']:,} output tokens._\n")
+    if not error and not calls:
+        error = "the agent answered without calling any tool"
+    md += ["### Answer\n", f"**Error:** {error}" if error else answer, ""]
+    return md, error
 
     md += ["\n---\n\n## What the data does and does not establish\n",
            "- Established: line counts, time spans, sources and owning teams for each pattern, computed in SereneDB over the loaded corpus.",
@@ -84,4 +116,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

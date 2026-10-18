@@ -67,7 +67,8 @@ Returns the lines around one line, at all levels, each with `seconds_from_target
 **`investigate_event(dataset, line_id, window=10)`**
 A one-call investigation of a single line. It returns:
 - `what_failed`: the line itself, with its component and owning team.
-- `before` / `after`: the lines either side of it.
+- `before` / `after`: the lines either side of it. Each line has `same_source_as_target`, because neighbours in the log are often from other nodes.
+- `context_summary`: how many of those lines come from the same source and how many from others.
 - `recurrence_in_dataset`: lines, sources, active days, and first and last time for the same template.
 - `same_source_problems`: other problem lines from the same source.
 - `candidate_cause`: the nearest earlier problem on the same source, or on any source within 1 hour. This is a lead to check, not proof.
