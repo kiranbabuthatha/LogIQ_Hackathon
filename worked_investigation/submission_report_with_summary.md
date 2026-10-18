@@ -1,8 +1,12 @@
-# Investigating Recurring OpenStack Disk-Processing Failures: One Pattern, Three Perspectives
-
-*A Role-Aware Investigation Using LogIQ and SereneDB*
+# One Pattern, Three Perspectives
 
 National AI Hackathon 2026 — SereneDB Challenge · LogIQ
+
+> **Reading guide:** sections 1–2 give the discovery and scope in one table; sections 3–5 show the same
+> evidence through three roles; section 6 lists what was established vs unknown; section 7 (collapsed)
+> contains the complete query evidence for verification.
+
+*QUESTION: Investigating Recurring OpenStack Disk-Processing Failures*
 
 ## 1. The Discovery
 
@@ -25,6 +29,10 @@ LogIQ combined log search, SereneDB aggregations, and role-aware AI analysis to 
 | **Other high-severity risk** | **2** identity-token validation CRITICAL lines, a separate issue. |
 | **What remains unknown** | Root cause, independent incident count, and customer or business impact. |
 | **Recommended next step** | Assign an investigation owner; verify disk-path availability and instance lifecycle timing, while separately reviewing identity errors. |
+
+![LogIQ information flow — questions → agent → tool calls (SQL) → SereneDB → role answers](flow_chart.png)
+*The full graph is also available as [`flow_chart.drawio`](flow_chart.drawio) (editable), [`flow_chart.svg`](flow_chart.svg), and [`flow_chart.json`](flow_chart.json).*
+
 
 ## 2. Investigation Scope
 
@@ -108,6 +116,8 @@ Recurrence is established. A larger infrastructure failure, underlying cause, in
 LogIQ helped each role make a different evidence-based decision: the Engineer identified checks that could explain the missing path; the Team Lead identified the need for coordinated ownership; the Manager balanced recurrence against severity and requested follow-up evidence before judging impact.
 
 ## 7. Technical Evidence Appendix
+
+<details><summary><b>Expand: full tool arguments, SQL, parameters and returned rows for every call</b> (evidence.jsonl)</summary>
 
 Only [report.md](report.md) and [evidence.jsonl](evidence.jsonl) were used. The JSONL contains the complete **returned** tool evidence and original answers; it cannot recover content omitted by the tools. Baseline calls were captured separately and were not injected into the role sessions.
 
@@ -2524,5 +2534,7 @@ The original Manager answer says component identity is unknown because the risk 
 The risk tool labels image-related templates `rising` by splitting the observed problem span at `2017-05-16 15:12:41`. The daily component aggregation instead reports 144 lines followed by 48. These are different aggregations, not evidence of a sustained increase or decrease. The returned risk data omits the raw `first_half` values selected by SQL, so its trend calculation cannot be independently audited from those returned fields alone. Observation coverage is incomplete for the second calendar day.
 
 The risk ranking returns five patterns and marks its pattern query truncated. Those five are not an exhaustive inventory. Likewise, the Engineer’s same-source problem sample is truncated. The original Markdown previews also limit lists or omit large results; the JSONL was used to inspect returned rows beyond those previews. No missing traceback text or historical traceback from another run has been substituted.
+
+</details>
 
 </details>

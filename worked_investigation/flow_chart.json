@@ -1,0 +1,301 @@
+{
+ "metadata": {
+  "dataset": "openstack",
+  "window": "2017-05-16 00:00:00 \u2192 2017-05-18 00:00:00",
+  "timestamp_scope": "as recorded; no timezone conversion",
+  "provider": "nvidia",
+  "model": "nvidia/nemotron-3-super-120b-a12b via nvidia"
+ },
+ "questions": {
+  "engineer": "Investigate recurring InvalidDiskInfo / qemu-img image-processing failures in OpenStack, 2017-05-16 00:00:00 inclusive to 2017-05-18 00:00:00 exclusive (May 16\u201317, 2017); timestamps as recorded, without timezone conversion. Focus on oslo_service.periodic_task. Show representative error lines and traceback context, distinguish observations from possible causes, and recommend concrete diagnostic checks. Distinguish search matches from complete tracebacks and log lines from independent incidents.",
+  "team_lead": "For recurring InvalidDiskInfo / qemu-img image-processing failures in OpenStack, 2017-05-16 00:00:00 inclusive to 2017-05-18 00:00:00 exclusive (May 16\u201317, 2017); timestamps as recorded, without timezone conversion, quantify recurrence, component and template volumes, ownership and investigation priorities for oslo_service.periodic_task. Keep search matches, exception occurrences, traceback context and independently verified incidents distinct. Identify ownership gaps and recommend coordinated actions without promising a log reduction.",
+  "manager": "For OpenStack, 2017-05-16 00:00:00 inclusive to 2017-05-18 00:00:00 exclusive (May 16\u201317, 2017); timestamps as recorded, without timezone conversion, summarize the operational priorities around recurring InvalidDiskInfo / qemu-img image-processing failures. Consider materially higher-severity OpenStack risks even if their counts are small. Give concise recommendations and ownership actions, including unassigned problems. Label count and percentage scopes; do not invent root causes, independent incidents or business impact."
+ },
+ "nodes": [
+  {
+   "id": "user",
+   "label": "User",
+   "sublabel": "asks one question per role: engineer / team_lead / manager",
+   "kind": "user",
+   "section": ""
+  },
+  {
+   "id": "agent",
+   "label": "LogIQ agent",
+   "sublabel": "model: nvidia/nemotron-3-super-120b-a12b via nvidia",
+   "kind": "agent",
+   "section": ""
+  },
+  {
+   "id": "db",
+   "label": "SereneDB",
+   "sublabel": "unified events table + inverted index \u2014 every call runs parameterised SQL",
+   "kind": "db",
+   "section": ""
+  },
+  {
+   "id": "baseline",
+   "label": "Shared baseline",
+   "sublabel": "scope: corpus overview + first pattern located (qemu-img)",
+   "kind": "section",
+   "section": ""
+  },
+  {
+   "id": "base_B1",
+   "label": "B1: corpus_overview",
+   "sublabel": "{}",
+   "kind": "tool",
+   "section": "baseline"
+  },
+  {
+   "id": "base_B2",
+   "label": "B2: search_logs",
+   "sublabel": "{\"text\": \"qemu-img\", \"dataset\": \"openstack\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 00:00:00\", \"component\": \u2026",
+   "kind": "tool",
+   "section": "baseline"
+  },
+  {
+   "id": "base_B3",
+   "label": "B3: count_problems",
+   "sublabel": "{\"group_by\": \"template\", \"dataset\": \"openstack\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 00:00:00\", \"componen\u2026",
+   "kind": "tool",
+   "section": "baseline"
+  },
+  {
+   "id": "engineer_Q1",
+   "label": "Q1: search_logs",
+   "sublabel": "{\"dataset\": \"openstack\", \"text\": \"InvalidDiskInfo\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 00:00:00\", \"limit\u2026",
+   "kind": "tool",
+   "section": "engineer"
+  },
+  {
+   "id": "engineer_Q2",
+   "label": "Q2: investigate_event",
+   "sublabel": "{\"dataset\": \"openstack\", \"line_id\": 45631, \"window\": 10}",
+   "kind": "tool",
+   "section": "engineer"
+  },
+  {
+   "id": "engineer_answer",
+   "label": "Engineer answer",
+   "sublabel": "Investigate recurring InvalidDiskInfo / qemu-img image-processing failures in OpenStack, 2017-05-16   [5552 chars]",
+   "kind": "answer",
+   "section": "engineer"
+  },
+  {
+   "id": "team_lead_Q1",
+   "label": "Q1: corpus_overview",
+   "sublabel": "{}",
+   "kind": "tool",
+   "section": "team_lead"
+  },
+  {
+   "id": "team_lead_Q2",
+   "label": "Q2: count_problems",
+   "sublabel": "{\"dataset\": \"openstack\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 00:00:00\", \"group_by\": \"component\", \"limit\":\u2026",
+   "kind": "tool",
+   "section": "team_lead"
+  },
+  {
+   "id": "team_lead_Q3",
+   "label": "Q3: count_problems",
+   "sublabel": "{\"dataset\": \"openstack\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 00:00:00\", \"group_by\": \"team\", \"component\": \u2026",
+   "kind": "tool",
+   "section": "team_lead"
+  },
+  {
+   "id": "team_lead_Q4",
+   "label": "Q4: count_problems",
+   "sublabel": "{\"dataset\": \"openstack\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 00:00:00\", \"group_by\": \"template\", \"componen\u2026",
+   "kind": "tool",
+   "section": "team_lead"
+  },
+  {
+   "id": "team_lead_Q5",
+   "label": "Q5: problem_trend",
+   "sublabel": "{\"dataset\": \"openstack\", \"component\": \"oslo_service.periodic_task\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 0\u2026",
+   "kind": "tool",
+   "section": "team_lead"
+  },
+  {
+   "id": "team_lead_answer",
+   "label": "Team_lead answer",
+   "sublabel": "For recurring InvalidDiskInfo / qemu-img image-processing failures in OpenStack, 2017-05-16 00:00:00  [4902 chars]",
+   "kind": "answer",
+   "section": "team_lead"
+  },
+  {
+   "id": "manager_Q1",
+   "label": "Q1: corpus_overview",
+   "sublabel": "{}",
+   "kind": "tool",
+   "section": "manager"
+  },
+  {
+   "id": "manager_Q2",
+   "label": "Q2: risk_ranking",
+   "sublabel": "{\"dataset\": \"openstack\", \"start\": \"2017-05-16 00:00:00\", \"end\": \"2017-05-18 00:00:00\", \"by\": \"pattern\", \"top\": 5}",
+   "kind": "tool",
+   "section": "manager"
+  },
+  {
+   "id": "manager_answer",
+   "label": "Manager answer",
+   "sublabel": "For OpenStack, 2017-05-16 00:00:00 inclusive to 2017-05-18 00:00:00 exclusive (May 16\u201317, 2017); tim  [3094 chars]",
+   "kind": "answer",
+   "section": "manager"
+  }
+ ],
+ "edges": [
+  {
+   "from": "baseline",
+   "to": "base_B1",
+   "label": "step 1"
+  },
+  {
+   "from": "base_B1",
+   "to": "db",
+   "label": "3 SQL queries"
+  },
+  {
+   "from": "baseline",
+   "to": "base_B2",
+   "label": "step 2"
+  },
+  {
+   "from": "base_B2",
+   "to": "db",
+   "label": "2 SQL queries"
+  },
+  {
+   "from": "baseline",
+   "to": "base_B3",
+   "label": "step 3"
+  },
+  {
+   "from": "base_B3",
+   "to": "db",
+   "label": "2 SQL queries"
+  },
+  {
+   "from": "agent",
+   "to": "engineer_Q1",
+   "label": "next call"
+  },
+  {
+   "from": "engineer_Q1",
+   "to": "db",
+   "label": "2 SQL queries"
+  },
+  {
+   "from": "engineer_Q1",
+   "to": "engineer_Q2",
+   "label": "next call"
+  },
+  {
+   "from": "engineer_Q2",
+   "to": "db",
+   "label": "5 SQL queries"
+  },
+  {
+   "from": "engineer_Q2",
+   "to": "engineer_answer",
+   "label": "interpret evidence"
+  },
+  {
+   "from": "engineer_answer",
+   "to": "user",
+   "label": "role answer"
+  },
+  {
+   "from": "agent",
+   "to": "team_lead_Q1",
+   "label": "next call"
+  },
+  {
+   "from": "team_lead_Q1",
+   "to": "db",
+   "label": "3 SQL queries"
+  },
+  {
+   "from": "team_lead_Q1",
+   "to": "team_lead_Q2",
+   "label": "next call"
+  },
+  {
+   "from": "team_lead_Q2",
+   "to": "db",
+   "label": "2 SQL queries"
+  },
+  {
+   "from": "team_lead_Q2",
+   "to": "team_lead_Q3",
+   "label": "next call"
+  },
+  {
+   "from": "team_lead_Q3",
+   "to": "db",
+   "label": "2 SQL queries"
+  },
+  {
+   "from": "team_lead_Q3",
+   "to": "team_lead_Q4",
+   "label": "next call"
+  },
+  {
+   "from": "team_lead_Q4",
+   "to": "db",
+   "label": "2 SQL queries"
+  },
+  {
+   "from": "team_lead_Q4",
+   "to": "team_lead_Q5",
+   "label": "next call"
+  },
+  {
+   "from": "team_lead_Q5",
+   "to": "db",
+   "label": "1 SQL query"
+  },
+  {
+   "from": "team_lead_Q5",
+   "to": "team_lead_answer",
+   "label": "interpret evidence"
+  },
+  {
+   "from": "team_lead_answer",
+   "to": "user",
+   "label": "role answer"
+  },
+  {
+   "from": "agent",
+   "to": "manager_Q1",
+   "label": "next call"
+  },
+  {
+   "from": "manager_Q1",
+   "to": "db",
+   "label": "3 SQL queries"
+  },
+  {
+   "from": "manager_Q1",
+   "to": "manager_Q2",
+   "label": "next call"
+  },
+  {
+   "from": "manager_Q2",
+   "to": "db",
+   "label": "2 SQL queries"
+  },
+  {
+   "from": "manager_Q2",
+   "to": "manager_answer",
+   "label": "interpret evidence"
+  },
+  {
+   "from": "manager_answer",
+   "to": "user",
+   "label": "role answer"
+  }
+ ]
+}
