@@ -45,12 +45,37 @@ Then:
   `claude mcp add --transport http logiq http://localhost:8001/mcp` — no repo or venv needed on the client side
 - **Stop / reset:** `docker compose down` (keeps data) · `docker compose down -v` (fresh start)
 
-Prefer the manual/native setup (venv + separate SereneDB container, every command explained)? See
-[section 1](#1-set-up-everyone), and the per-tool reference in [FUNCTIONS.md](FUNCTIONS.md).
+---
+
+## Two ways to install
+
+- **Method 1 — Docker (the Quick start above, recommended).** One command starts everything: database, data
+  download/parse/load, web UI and the MCP server. No Python or SereneDB installation on your machine.
+
+- **Method 2 — manual (section 1).** Virtual environment + a separately started SereneDB container + explicit
+  load commands, each explained step by step. Use it if you prefer not to have Docker manage the services, or
+  need fine-grained control (e.g. pointing at your own database instance).
+
+## Add the MCP server to your client (Method 1 — Docker stack running)
+
+| Client | Command / configuration |
+|---|---|
+| Claude Code | `claude mcp add --transport http logiq http://localhost:8001/mcp` |
+| OpenCode | `opencode mcp add logiq --global --url http://localhost:8001/mcp` |
+| Codex | `codex mcp add logiq --url http://localhost:8001/mcp` |
+| Cursor | `mcp.json`: `{"mcpServers": {"logiq": {"url": "http://localhost:8001/mcp"}}}` |
+| Claude Desktop | add a remote/HTTP entry with URL `http://localhost:8001/mcp` (recent versions) — or use the stdio JSON in [§4.2](#42-connect-your-client) |
+
+All 19 tools are served at that URL. From another machine, replace `localhost` with the host's LAN IP.
+
+(For **Method 2** — manual setup — the same clients connect over **stdio** with the local paths instead; exact commands
+per client in [§4.2](#42-connect-your-client).)
 
 ---
 
 ## 1. Set up (everyone)
+
+> **This is Method 2 — the manual setup.** For the one-command Docker path, see the [Quick start](#quick-start).
 
 These steps are the same however you use LogIQ.
 
