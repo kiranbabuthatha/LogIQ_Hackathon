@@ -221,7 +221,9 @@ configured. If you see **Agent offline**, the banner says which setting is missi
 1. **Pick a role card:** Engineer, Team lead or Manager.
 2. **Ask:** click an example question, or type your own and press **Ask** (or Ctrl/⌘ + Enter).
 3. **Watch it work.** Each tool call appears in the **Evidence trail** on the right as it runs.
-4. **Read the answer** on the left. It's structured for the role, for example *What failed → Evidence → Possible cause → Next check → Unknowns* for an engineer.
+4. **Read the answer** on the left. It's tiered: a **Level 0 summary** (1–2 sentences) and a **Level 1 summary** first, then
+   the role structure — for an engineer *What failed → Key log lines → Possible cause → Next check → Unknowns* — and a
+   **Show your work** appendix at the end.
 5. **Check any number.** Click a **Q2** chip to jump to that tool call, and open **SQL 1, SQL 2…** to see the exact query and parameters. A **truncated** badge means only the first rows are shown; totals are still exact. Yellow notes are caveats the answer must respect.
 6. **Follow up** in the same conversation, for example *"Now check the 2 hours before line 3326688"*. Press **New** to start over.
 
@@ -376,6 +378,25 @@ In that case, start your message with *"Using logiq, as an engineer / a team lea
 
 Each role prompt asks the model to number its tool calls (Q1, Q2, …), cite them, and list them at the end. That gives you the
 evidence trail in the chat.
+
+### The shape of an answer
+
+Every LogIQ answer — in the web app, an MCP client or the CLI — follows the same tiered structure:
+
+1. **`## Level 0 summary`** — one or two sentences that compress the whole result. No plumbing; only the one or two
+   numbers that matter. Useful if you read nothing else.
+2. **`## Level 1 summary`** — a short paragraph: key findings with the most important measured numbers, the scope they
+   cover, and the main recommendation or next step.
+3. **The role sections** — the detailed answer for your role (engineer: *What failed → Key log lines → Around it →
+   Possible cause (hypothesis) → Next check → Unknowns*; team lead: *Period and scope → Recurring problems → …*;
+   manager: *Bottom line → Priorities → What the data does not tell us*).
+4. **`## Show your work`** — the appendix where all the plumbing lives: for every query behind a claim, one line with
+   the tool used, the inputs given, the SQL that ran, the rows returned and whether the result was truncated, each
+   tagged with its evidence id `[Q#]`.
+
+Two rules keep the answer readable and honest: the narrative **interprets results only** (tool names, inputs and SQL
+never appear outside the appendix), and facts stay separated from interpretation — hypotheses and limitations are
+labelled where they occur.
 
 ### 4.5 Your first session: three walk-throughs
 
@@ -578,7 +599,7 @@ The MCP server also offers three **prompts**, `engineer`, `team_lead` and `manag
 
 ### How the three roles differ
 
-All roles use the same tools and data. The role prompt changes the questions asked, the evidence gathered and the action recommended:
+All roles use the same tools and data. Every answer starts with the Level 0 / Level 1 summaries and ends with the Show-your-work appendix; the role prompt changes the detailed sections in between - the questions asked, the evidence gathered and the action recommended:
 
 | | Engineer | Team lead | Manager |
 |---|---|---|---|
