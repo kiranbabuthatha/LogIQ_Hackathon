@@ -17,8 +17,10 @@ You can use LogIQ in three ways: a **web app**, any **MCP client** (Claude Code,
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [Set up (Method 2 — manual setup)](#set-up-method-2-manual-setup)
+- [Two ways to install](#two-ways-to-install)
+- [0. Quick start (Method 1 — Docker)](#0-quick-start-method-1--docker)
+- [Add the MCP server to your client](#add-the-mcp-server-to-your-client-method-1--docker-stack-running)
+- [1. Set up (Method 2 — manual setup)](#1-set-up-method-2--manual-setup)
 - [2. Choose how to use it](#2-choose-how-to-use-it)
 - [3. Use the web app](#3-use-the-web-app)
 - [4. Use LogIQ over MCP](#4-use-logiq-over-mcp)
@@ -30,13 +32,13 @@ You can use LogIQ in three ways: a **web app**, any **MCP client** (Claude Code,
 
 ## Two ways to install
 
-- **Method 1 — Docker (recommended).** The [Quick start](#quick-start) below: one command starts everything —
+- **Method 1 — Docker (recommended).** The [Quick start](#0-quick-start-method-1--docker) below: one command starts everything —
   database, data download/parse/load, web UI and the MCP server. No Python or SereneDB installation on your machine.
 - **Method 2 — manual.** Virtual environment + a separately started SereneDB container + explicit load commands,
-  each explained step by step in [section 1](#set-up-method-2-manual-setup). Use it if you prefer not to have Docker manage the
+  each explained step by step in [section 1](#1-set-up-method-2--manual-setup). Use it if you prefer not to have Docker manage the
   services, or need fine-grained control (e.g. pointing at your own database instance).
 
-## Quick start (Method 1 — Docker)
+## 0. Quick start (Method 1 — Docker)
 
 Docker installed? Then the whole stack — SereneDB, data download/parse/load, web UI and MCP — is one command.
 First run takes ~10 minutes (770 MB download, parse, load); watch progress with `docker compose logs -f init`.
@@ -72,7 +74,7 @@ per client in [§4.2](#42-connect-your-client).)
 
 ---
 
-## Set up (Method 2 — manual setup)
+## 1. Set up (Method 2 — manual setup)
 
 > **This is Method 2 — the manual setup.** For the one-command Docker path, see the [Quick start](#quick-start).
 
@@ -302,7 +304,7 @@ and as an engineer, **quote the error text**, which goes straight into full-text
 
 - **Your client's model does the reasoning.** LogIQ provides the tools and data, so `.env` needs only `SERENEDB_DSN`.
 - **The server offers 19 tools and 3 role prompts** (`engineer`, `team_lead`, `manager`). The role prompts give your client's model the same instructions and evidence rules as the web app.
-- **Before connecting,** complete [section 1](#set-up-method-2-manual-setup): SereneDB running, data loaded, `.env` in place.
+- **Before connecting,** complete [section 1](#1-set-up-method-2--manual-setup): SereneDB running, data loaded, `.env` in place.
 
 ### 4.2 Connect your client
 
