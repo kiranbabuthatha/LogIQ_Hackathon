@@ -226,6 +226,9 @@ def preceding_patterns(dataset: str, line_id: int, minutes: float = 30, limit: i
     if not rows:
         ev.notes.append(f"No template appears {min_lines}+ times in the {minutes} minutes before this event, so there is "
                         "no over-represented pattern; try a longer window or min_lines=1.")
+    elif not any(r["same_source_lines"] for r in rows):
+        ev.notes.append(f"None of these lines come from the failing line's source ({t[0]['source']}): they were logged by "
+                        "other sources. Do not describe them as happening on the failing node.")
     ev.notes += ["lift = share of the window ÷ share of the whole dataset; lift > 1 means over-represented before the event.",
                  "This is co-occurrence in time, not proof of cause. Few lines in the window make lift unstable."]
     return ev.result({"target": {"line_id": line_id, **t[0]}, "window_start": f"{lo:%Y-%m-%d %H:%M:%S}", "patterns": rows},
@@ -303,11 +306,19 @@ def investigate_event(dataset: str, line_id: int, window: int = 10):
 
     for r in around + same_source + [t]:
         r["content"] = _cut(r["content"])
-    ev.notes += ["candidate_cause is the nearest earlier problem on the same source (or any source within 1 hour). "
+    before = [r for r in around if r["line_id"] < line_id]
+    after = [r for r in around if r["line_id"] > line_id]
+    for r in before + after:  # say it explicitly: neighbours in the log are often from other nodes
+        r["same_source_as_target"] = r["source"] == t["source"]
+    context = {f"{side}_{kind}": sum(r["same_source_as_target"] == same for r in rows)
+               for side, rows in (("before", before), ("after", after)) for kind, same in (("same_source", True), ("other_sources", False))}
+    ev.notes += [f"Context: {context['before_same_source']} of {len(before)} lines before and {context['after_same_source']} of "
+                 f"{len(after)} after come from the same source ({t['source']}); the rest are from other sources. "
+                 "Only attribute a line to the failing node when same_source_as_target is true.",
+                 "candidate_cause is the nearest earlier problem on the same source (or any source within 1 hour). "
                  "It is a lead to check, not an established cause.", LINES_NOT_INCIDENTS]
-    return ev.result({"what_failed": t, "before": [r for r in around if r["line_id"] < line_id],
-                      "after": [r for r in around if r["line_id"] > line_id], "candidate_cause": cause,
-                      "recurrence_in_dataset": recurrence, "same_source_problems": same_source,
+    return ev.result({"what_failed": t, "context_summary": context, "before": before, "after": after,
+                      "candidate_cause": cause, "recurrence_in_dataset": recurrence, "same_source_problems": same_source,
                       "suggested_checks": checks}, f"{dataset}, line {line_id} ± {window} plus whole-dataset recurrence")
 
 
