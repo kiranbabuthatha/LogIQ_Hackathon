@@ -30,22 +30,23 @@ You can use LogIQ in three ways: a **web app**, any **MCP client** (Claude Code,
 
 ## Quick start
 
-On macOS or Linux, with Python 3.10+ and Docker installed. Each command is explained in [section 1](#1-set-up-everyone).
+Docker installed? Then the whole stack — SereneDB, data download/parse/load, web UI and MCP — is one command.
+First run takes ~10 minutes (770 MB download, parse, load); watch progress with `docker compose logs -f init`.
 
 ```bash
-git clone https://github.com/kiranbabuthatha/LogIQ_Hackathon.git && cd LogIQ_Hackathon
-python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-
-docker run -d --name serenedb -p 7890:7890 -e POSTGRES_PASSWORD=change-me \
-  -v serenedb-data:/var/lib/serenedb serenedb/serenedb:26.09.2
-
-cp .env.example .env                 # contains SERENEDB_DSN for the container above; add a model key for the web app
-python prepare_data.py && python load.py
+git clone -b feature_docker https://github.com/kiranbabuthatha/LogIQ_Hackathon.git && cd LogIQ_Hackathon
+cp .env.example .env        # add ONE model key (e.g. NVIDIA_API_KEY=...) - the only manual step
+docker compose up --build
 ```
 
-Then either:
-- **Web app:** `uvicorn app:app --port 8000` and open http://127.0.0.1:8000. This needs a model key in `.env`; see [3.1](#31-pick-the-model).
-- **MCP:** `claude mcp add logiq -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"`, then ask Claude Code. No model key is needed; see [section 4](#4-use-logiq-over-mcp).
+Then:
+- **Web UI:** http://localhost:8000 (three role tabs, tiered answers)
+- **MCP:** add a remote server with URL `http://localhost:8001/mcp`, e.g.
+  `claude mcp add --transport http logiq http://localhost:8001/mcp` — no repo or venv needed on the client side
+- **Stop / reset:** `docker compose down` (keeps data) · `docker compose down -v` (fresh start)
+
+Prefer the manual/native setup (venv + separate SereneDB container, every command explained)? See
+[section 1](#1-set-up-everyone), and the per-tool reference in [FUNCTIONS.md](FUNCTIONS.md).
 
 ---
 
