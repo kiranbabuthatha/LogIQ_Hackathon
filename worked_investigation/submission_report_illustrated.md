@@ -7,23 +7,18 @@ OpenStack, software that manages cloud computers, repeatedly failed to inspect a
 
 ![Problem Overview](assets/01_problem_overview.png)
 
-[Edit the problem diagram](assets/01_problem_overview.drawio)
-
 The counts overlap: exception lines, search matches and component ERROR lines are different measurements, not independent incidents. The missing-path diagnostic does not explain why the file was unavailable.
 
 ## 2. How LogIQ investigates
 
 ![LogIQ Architecture](assets/02_logiq_architecture_light.drawio.png)
 
-[Edit the architecture diagram](assets/02_logiq_architecture.drawio)
 
 An agent chooses tools, which execute SQL (database queries) in SereneDB and return evidence for interpretation. All figures use the recorded OpenStack investigation; whole-corpus overview calls also include the separate BGL dataset.
 
 ## 3. Engineer
 
 ![Engineer Investigation](assets/03_engineer_investigation.png)
-
-[Edit the engineer diagram](assets/03_engineer_investigation.drawio)
 
 <details>
 <summary>View actual tool calls, SQL and results</summary>
@@ -1078,8 +1073,6 @@ These checks will help determine if the failures stem from a race condition in i
 ## 4. Team Lead
 
 ![Team Lead Investigation](assets/04_teamlead_investigation.png)
-
-[Edit the team lead diagram](assets/04_teamlead_investigation.drawio)
 
 <details>
 <summary>View actual tool calls, SQL and results</summary>
@@ -2269,7 +2262,6 @@ Because each of the 24 templates contributes 8 lines total, the pattern indicate
 
 ![Manager Investigation](assets/05_manager_investigation.png)
 
-[Edit the manager diagram](assets/05_manager_investigation.drawio)
 
 <details>
 <summary>View actual tool calls, SQL and results</summary>
@@ -2778,7 +2770,6 @@ During the May 16‑17 2017 window, OpenStack logged recurring ERROR‑level
 
 ![Investigation Summary](assets/06_investigation_summary.png)
 
-[Edit the summary diagram](assets/06_investigation_summary.drawio)
 
 <details>
 <summary>View shared baseline evidence, scope and export status</summary>
