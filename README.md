@@ -180,7 +180,7 @@ You're set up. Now [choose how to use it](#2-choose-how-to-use-it).
 
 ## 2. Choose how to use it
 
-All three ways use the same 11 tools and the same data:
+All three ways use the same 19 tools and the same data:
 
 | | [Web app](#3-use-the-web-app) | [MCP](#4-use-logiq-over-mcp) | [Terminal](#5-use-it-from-the-terminal) |
 |---|---|---|---|
@@ -258,7 +258,7 @@ and as an engineer, **quote the error text**, which goes straight into full-text
 ```
 
 - **Your client's model does the reasoning.** LogIQ provides the tools and data, so `.env` needs only `SERENEDB_DSN`.
-- **The server offers 11 tools and 3 role prompts** (`engineer`, `team_lead`, `manager`). The role prompts give your client's model the same instructions and evidence rules as the web app.
+- **The server offers 19 tools and 3 role prompts** (`engineer`, `team_lead`, `manager`). The role prompts give your client's model the same instructions and evidence rules as the web app.
 - **Before connecting,** complete [section 1](#1-set-up-everyone): SereneDB running, data loaded, `.env` in place.
 
 ### 4.2 Connect your client
@@ -352,9 +352,9 @@ writing; check that documentation if something doesn't match.
 
 | Client | How to check | Expected |
 |---|---|---|
-| Claude Code | `claude mcp list`, or `/mcp` inside Claude Code | `logiq … ✔ Connected`, with 11 tools and 3 prompts |
+| Claude Code | `claude mcp list`, or `/mcp` inside Claude Code | `logiq … ✔ Connected`, with 19 tools and 3 prompts |
 | Any client | Ask: *"Using logiq, give me an overview of the data."* | It calls `corpus_overview` and reports **4,747,963** BGL and **207,820** OpenStack lines |
-| No LLM at all | `npx -y @modelcontextprotocol/inspector --cli /abs/path/LogIQ_Hackathon/.venv/bin/python /abs/path/LogIQ_Hackathon/mcp_server.py --method tools/list` | The 11 tools (✔ tested; needs Node.js). Use `--method prompts/list` for the 3 prompts, or drop `--cli` for the web interface. |
+| No LLM at all | `npx -y @modelcontextprotocol/inspector --cli /abs/path/LogIQ_Hackathon/.venv/bin/python /abs/path/LogIQ_Hackathon/mcp_server.py --method tools/list` | The 19 tools (✔ tested; needs Node.js). Use `--method prompts/list` for the 3 prompts, or drop `--cli` for the web interface. |
 
 ### 4.4 Ask as a role (recommended)
 
@@ -527,7 +527,7 @@ On a laptop, preparing takes about 25 s and loading plus indexing all 4.96M line
           ▼
  ┌──────────────────┐   ② picks a tool    ┌───────────────────┐   ③ parameterised SQL   ┌─────────────┐
  │  AI model        │────────────────────▶│  tools.py         │────────────────────────▶│  SereneDB   │
- │  (role prompt +  │                     │  11 tools, e.g.   │                         │  search &   │
+ │  (role prompt +  │                     │  19 tools, e.g.   │                         │  search &   │
  │   evidence rules)│◀────────────────────│  search_logs,     │◀────────────────────────│  aggregate  │
  └──────────────────┘   ④ evidence        │  risk_ranking     │   limited rows + counts └─────────────┘
           │               envelope [Q1]   └───────────────────┘
@@ -537,7 +537,7 @@ On a laptop, preparing takes about 25 s and loading plus indexing all 4.96M line
 ```
 
 1. **The role** sets which questions matter, what evidence to gather, and what kind of action to recommend.
-2. **The model picks a tool** from the 11 tool descriptions and fills in its arguments. It never writes SQL.
+2. **The model picks a tool** from the 19 tool descriptions and fills in its arguments. It never writes SQL.
 3. **SereneDB does the work:** full-text search through the index, or `count(*)` / `GROUP BY` over the whole corpus. Only limited rows come back, but totals are computed in full.
 4. **An evidence envelope comes back** (`Q1`, `Q2`, …) with the scope, filters, each SQL statement and its parameters, rows returned, a `truncated` flag, the results and caveat notes.
 5. **The model repeats**, usually 2–6 times, for example search → investigate one line → look at what preceded it → check the template's history.
@@ -679,7 +679,9 @@ agent_tools.py          small CLI for raw-table inspection (not used by the agen
 - **OpenStack line order.** The three files are merged by timestamp, so neighbouring `line_id`s can come from different files. Use `get_nearby_events(minutes=…, same_source=true)` to stay within one file.
 - **Fictional ownership.** Teams come from the `ownership` table, which describes a fictional organisation; two OpenStack components are unassigned.
 - **Heuristics, not root causes.** These are simple, documented rules: `candidate_cause` (the nearest earlier problem on the same source, or on any source within 1 hour), `lift`, the trend labels (a 1.5× change between halves; "single burst" when every line falls within 5% of the period) and `priority_score`. They point to where to look; they don't prove a cause.
-- **Lines are not incidents.** No tool groups lines into incidents; `active_hours` and `active_days` are rough proxies.
+- **Correlations and chains are heuristics too.** `correlate_templates`/`correlation_chains` use Pearson on log1p daily counts; r close to ±1 can mean 'always written together' (a report structure) as easily as interacting faults. Chain `order_proposal` ranks templates by average first-line time inside episodes — a sequencing hint, explicitly not causation. Strict (±0.999) chains need the bundle to repeat on ≥2 days; single-day coincidences stay candidates.
+- **Lines are not incidents.** `count_incidents` collapses bursts into episodes (one incident = one source + time bucket), but the bucket is an approximation: a fault logging intermittently for an hour in one place still counts as one episode, and the same fault on many nodes counts as many. `active_hours`/`active_days` remain rough proxies.
+- **Structured extraction is OpenStack-shaped.** The `extract_field`/`filter_numeric` registry (latency, status, request/tenant/instance ids) matches OpenStack message formats; on other datasets these return zero coverage until the registry is extended. All other tools are dataset-agnostic.
 - **Timestamps** are as recorded in each log, with no timezone conversion. BGL and OpenStack cover different years, so trends are computed per dataset.
 - **Web UI** has no login, and keeps conversations in memory, so a restart clears them. Run it locally.
 - **Not implemented:** on-demand indexing, the OpenTelemetry Parquet data, and row-level security per role. These are optional extras, judged separately from the main score.
