@@ -206,7 +206,8 @@ python load.py             # load into SereneDB and build the full-text index   
 | The small Loghub 2k samples (quick demo, no download) | Move `data/*.csv` away, then `python load.py` |
 | Your own CSVs with the same columns | `BGL_SOURCE=path/or/url.csv OPENSTACK_SOURCE=path/or/url.csv python load.py` |
 
-### 1.5 Check that it worked
+<details><summary><b>1.5 Check that it worked — expected outputs</b></summary>
+
 
 ```bash
 python -c "import tools; print([(d['dataset'], d['lines']) for d in tools.corpus_overview()['data']['datasets']])"
@@ -217,23 +218,8 @@ You're set up. Now [choose how to use it](#2-choose-how-to-use-it).
 
 ---
 
-## 1.9 One-command Docker setup (any OS)
 
-If you have Docker, the whole stack — SereneDB, data download/parse/load, web UI and the MCP server — starts with:
-
-```bash
-cp .env.example .env        # add your model key (the only manual step)
-docker compose up --build
-```
-
-Then:
-- Web UI: http://localhost:8000
-- First run takes ~10 minutes (770 MB download + parse + load) — watch progress with `docker compose logs -f init`;
-  later runs reuse the `serenedb-data` volume and the parsed CSVs in `./data`.
-- MCP over HTTP (works from any machine, no clone needed): add a **remote** MCP server with URL
-  `http://<this-machine>:8001/mcp`, e.g. on the same machine:
-  `claude mcp add --transport http logiq http://localhost:8001/mcp`
-- Stop: `docker compose down` (keeps data). Fresh start: `docker compose down -v`.
+</details>
 
 ## 2. Choose how to use it
 
@@ -417,7 +403,9 @@ Add a **stdio** server named `logiq`. Set the command to `/abs/path/LogIQ_Hackat
 "Untested" means we couldn't try that client here. Its config format comes from the client's documentation at the time of
 writing; check that documentation if something doesn't match.
 
-**HTTP variant — with the Docker stack running (§1.9), connect by URL instead:**
+<details><summary><b>HTTP variant — connect by URL (Docker stack)</b></summary>
+
+**HTTP variant — with the Docker stack running (§ Quick start), connect by URL instead:**
 
 ```bash
 # Claude Code
@@ -434,6 +422,9 @@ codex mcp add logiq --url http://localhost:8001/mcp
 - VS Code (Copilot agent mode): `{ "servers": { "logiq": { "type": "http", "url": "http://localhost:8001/mcp" } } }`.
 - From another machine, replace `localhost` with the host's LAN IP (the container binds `0.0.0.0`). All 19 tools are
   served over this URL — no repo, venv or paths on the client side.
+
+
+</details>
 
 ### 4.3 Check the connection
 
@@ -630,7 +621,8 @@ On a laptop, preparing takes about 25 s and loading plus indexing all 4.96M line
 5. **The model repeats**, usually 2–6 times, for example search → investigate one line → look at what preceded it → check the template's history.
 6. **The answer** follows the role's structure. Every number cites its evidence, hypotheses are labelled, unknowns are stated, counts are log lines (not incidents), and nothing about downtime or cost is invented.
 
-### A real run, traced
+<details><summary><b>A real run, traced — full query trail</b></summary>
+
 
 The engineer question *"What is behind the 'Link has been severed' errors in BGL after September 2005?"* produced this trace.
 Every number was re-checked against the database:
@@ -652,6 +644,9 @@ mistakes. Since then, `preceding_patterns` ignores templates seen fewer than 2 t
 warns about both.
 
 ---
+
+
+</details>
 
 ## 7. Reference
 
@@ -701,7 +696,8 @@ Evidence rules in every role prompt:
 - Hypotheses are labelled, and unknowns are stated.
 - No downtime, cost or customer impact, because the logs don't contain it.
 
-### Data preparation
+<details><summary><b>Data preparation details</b></summary>
+
 
 - **Parsing.**
   - BGL lines are `Label Timestamp Date Node Time NodeRepeat Type Component Level Content`.
@@ -713,13 +709,21 @@ Evidence rules in every role prompt:
   - Ids `E1, E2, …` are assigned in order of first appearance.
 - **Team ownership.** The `ownership` rows in [sql/schema.sql](sql/schema.sql) map component prefixes to the teams of a fictional organisation (`KERNEL` → `compute-kernel`, `nova.compute` → `compute-core`, …). Edit them and run `python load.py` to change owners. Two OpenStack components have no owner and show as **unassigned**: `oslo_service.periodic_task` (192 ERROR lines) and `keystonemiddleware.auth_token` (6 lines).
 
-### Local files and Docker
+
+</details>
+
+<details><summary><b>Local files and Docker</b></summary>
+
 
 The SereneDB server reads files from *its own* filesystem, so inside Docker it can't see files on your computer. `load.py`
 avoids the problem by streaming local CSVs with `COPY … FROM STDIN`. For your own SQL with `read_csv('/data/…')`, mount a
 folder by adding `-v "$PWD/data":/data` to `docker run`. Remote files over HTTP(S) or S3 need no mount.
 
-### All `.env` settings
+
+</details>
+
+<details><summary><b>All .env settings</b></summary>
+
 
 | Setting | Needed for | What it does |
 |---|---|---|
@@ -732,7 +736,11 @@ folder by adding `-v "$PWD/data":/data` to `docker run`. Remote files over HTTP(
 | `LOGIQ_EFFORT` | optional, Claude only | `low` / `medium` (default) / `high` / `xhigh` / `max` |
 | `BGL_SOURCE`, `OPENSTACK_SOURCE` | optional | Load data from somewhere other than `data/` ([1.4](#14-get-and-load-the-data)) |
 
-### Data model
+
+</details>
+
+<details><summary><b>Data model</b></summary>
+
 
 | Object | What it is |
 |---|---|
@@ -743,7 +751,11 @@ folder by adding `-v "$PWD/data":/data` to `docker run`. Remote files over HTTP(
 | `events_v` | `events` + `team` + `is_problem` |
 | `events_idx` | Inverted full-text index over `content`, queried with `@@`, ranked with BM25 |
 
-### Project layout
+
+</details>
+
+<details><summary><b>Project layout</b></summary>
+
 
 ```
 app.py                  web server: /api/ask streams agent events, /api/tool/<name> runs one tool
@@ -758,6 +770,9 @@ WORKED_INVESTIGATION.md one worked investigation per role, with every query
 FUNCTIONS.md            tool reference
 agent_tools.py          small CLI for raw-table inspection (not used by the agent)
 ```
+
+
+</details>
 
 ### Known limitations
 
