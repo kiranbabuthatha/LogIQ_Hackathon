@@ -36,8 +36,9 @@ BUCKETS = ("hour", "day", "week", "month")
 GROUP_BY = {  # allowed grouping keys -> SQL expression (identifiers can't be parameters)
     "dataset": "dataset", "team": "team", "component": "component", "level": "level",
     "template": "template_id", "alert_type": "alert_type", "source": "source",
+    "severity": "severity",
 }
-SPLIT_BY = {"none": None, "dataset": "dataset", "team": "team", "component": "component"}
+SPLIT_BY = {"none": None, "dataset": "dataset", "team": "team", "component": "component", "severity": "severity"}
 CONTENT_CHARS = 300   # log text is cut to this length in returned rows
 CAUSE_GAP = timedelta(hours=1)
 LINES_NOT_INCIDENTS = "Counts are matching log lines, not separate incidents; one fault can log many lines."
@@ -366,8 +367,9 @@ def problem_trend(bucket: str = "week", dataset: Optional[str] = None, start: Op
                                         component=component, template_id=template_id, split_by=split_by))
     where, params = _filters(dataset, start, end, team, component)
     if template_id:
-        where += " AND template_id = %s"
-        params.append(template_id)
+        ids = [t.strip() for t in template_id.split(",") if t.strip()]
+        where += " AND template_id IN (%s)" % ", ".join(["%s"] * len(ids))
+        params.extend(ids)
     split = SPLIT_BY[split_by]
     sel = f", {split} AS {split_by}" if split else ""
     rows = ev.run(f"Problem lines per {bucket}" + (f" and {split_by}" if split else ""),
@@ -738,6 +740,189 @@ def correlate_templates(dataset: str, start: Optional[str] = None, end: Optional
                      _scope(dataset, start, end))
 
 
+
+# ------------------------------------------------- chain analysis (strict ±1 correlations)
+
+import hashlib
+
+def _daily_series(ev, where, params, min_active_days, min_lines):
+    """Shared daily per-template series for correlation tools."""
+    rows = ev.run("Daily line counts per template",
+                  f"SELECT template_id, CAST(ts AS DATE) AS day, count(*) AS c "
+                  f"FROM events_v WHERE {where} GROUP BY 1, 2", params)
+    names = ev.run("Template texts",
+                   f"SELECT template_id, ANY_VALUE(template) AS template, ANY_VALUE(team) AS team, "
+                   f"count(*) AS lines FROM events_v WHERE {where} GROUP BY 1", params)
+    text = {r["template_id"]: r for r in names}
+    days = sorted({r["day"] for r in rows})
+    per_tpl = {}
+    for r in rows:
+        per_tpl.setdefault(r["template_id"], {})[r["day"]] = r["c"]
+    kept = {t: d for t, d in per_tpl.items()
+            if len(d) >= min_active_days and sum(d.values()) >= min_lines and t in text}
+    return days, kept, text
+
+
+def _cliques(nodes, edges):
+    """Maximal cliques (Bron-Kerbosch) over the strict-correlation graph."""
+    adj = {n: set() for n in nodes}
+    for a, b in edges:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    out = []
+
+    def bk(R, P, X):
+        if not P and not X:
+            if len(R) >= 2:
+                out.append(sorted(R))
+            return
+        pivot = max(P | X, key=lambda v: len(adj.get(v, set()) & P), default=None)
+        for v in list(P - (adj.get(pivot, set()) & P if pivot else set())):
+            bk(R | {v}, P & adj.get(v, set()), X & adj.get(v, set()))
+            P = P - {v}
+            X = X | {v}
+
+    bk(set(), set(adj), set())
+    return out
+
+
+def _chain_id(templates):
+    return "CH-" + hashlib.md5("|".join(sorted(templates)).encode()).hexdigest()[:8]
+
+
+def correlation_chains(dataset: str, start: Optional[str] = None, end: Optional[str] = None,
+                       min_r: float = 0.999, min_repeats: int = 2, top: int = 20):
+    """Candidate chains from strict (+1 / -1) daily correlations. A chain is CONFIRMED only when the
+    same template bundle repeats on >= min_repeats distinct days; otherwise it stays a candidate.
+    Order inside a chain is a timestamp-based PROPOSAL (earliest average first line per episode), not causation."""
+    ev = Evidence("correlation_chains", {"dataset": dataset, "start": start, "end": end,
+                                         "min_r": min_r, "min_repeats": min_repeats})
+    where, params = _filters(dataset=dataset, start=start, end=end)
+    days, kept, text = _daily_series(ev, where, params, min_active_days=5, min_lines=50)
+    keys = sorted(kept)
+    import math
+    series = {t: [math.log1p(kept[t].get(d, 0)) for d in days] for t in keys}
+
+    def pearson(xs, ys):
+        n = len(xs)
+        mx, my = sum(xs) / n, sum(ys) / n
+        cov = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+        vx = sum((a - mx) ** 2 for a in xs) ** 0.5
+        vy = sum((b - my) ** 2 for b in ys) ** 0.5
+        return cov / (vx * vy) if vx and vy else 0.0
+
+    pos, neg = [], []
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            r = pearson(series[keys[i]], series[keys[j]])
+            if r >= min_r:
+                pos.append((keys[i], keys[j], r))
+            elif r <= -min_r:
+                neg.append((keys[i], keys[j], r))
+
+    cliques = _cliques(keys, [(a, b) for a, b, _ in pos])
+    # per-template earliest line per day (for the order proposal)
+    tmin = ev.run("Earliest line per template and day",
+                  f"SELECT template_id, CAST(ts AS DATE) AS day, min(ts) AS first_ts FROM events_v "
+                  f"WHERE {where} GROUP BY 1, 2", params)
+    first_ts = {}
+    for r in tmin:
+        first_ts.setdefault(r["template_id"], {})[r["day"]] = r["first_ts"]
+
+    chains, candidates = [], []
+    for c in cliques:
+        active = [set(kept[t]) for t in c]
+        co_days = sorted(set.intersection(*active))
+        if not co_days:
+            continue
+        import datetime as _dt
+        mid = days[len(days) // 2]
+        first_half = sum(kept[t].get(d, 0) for t in c for d in co_days if d <= mid)
+        second_half = sum(kept[t].get(d, 0) for t in c for d in co_days if d > mid)
+        order_scores = {}
+        for t in c:
+            vals = [first_ts.get(t, {}).get(d) for d in co_days if first_ts.get(t, {}).get(d)]
+            vals = [v if hasattr(v, "hour") else datetime.fromisoformat(str(v)) for v in vals]
+            if vals:
+                order_scores[t] = sum(v.hour * 3600 + v.minute * 60 + v.second for v in vals) / len(vals)
+        order = [t for t, _ in sorted(order_scores.items(), key=lambda kv: kv[1])]
+        info = {
+            "chain_id": _chain_id(c), "size": len(c),
+            "templates": [{"template_id": t, "template": text[t]["template"], "team": text[t]["team"]}
+                          for t in sorted(c)],
+            "order_proposal": order,
+            "episodes": len(co_days), "episode_dates": [str(d) for d in co_days][:top],
+            "lines_total": sum(kept[t].get(d, 0) for t in c for d in co_days),
+            "trend_first_half_lines": first_half, "trend_second_half_lines": second_half,
+        }
+        (chains if len(co_days) >= min_repeats else candidates).append(info)
+    chains.sort(key=lambda x: (-x["episodes"], -x["size"]))
+    candidates.sort(key=lambda x: (-x["episodes"], -x["size"]))
+    neg_out = [{"a": a, "b": b, "r": round(r, 3),
+                "template_a": text[a]["template"], "template_b": text[b]["template"]}
+               for a, b, r in sorted(neg, key=lambda x: x[2])[:top]]
+    ev.notes += [
+        "CONFIRMED chains repeated on >= min_repeats distinct days; candidates did not repeat yet (single-day coincidences).",
+        "order_proposal ranks templates by their average first-line time of day inside episodes — a sequencing hint, NOT causation.",
+        "Negative pairs fire on opposite days (mutual exclusion); they are indicators of distinct regimes, not co-firing chains.",
+        "Correlation uses log1p(daily counts); r >= 0.999 is required for a pair to enter a chain.",
+    ]
+    return ev.result({"templates_considered": len(keys), "days": len(days),
+                      "confirmed_chains": chains[:top], "candidate_chains": candidates[:top],
+                      "negative_pairs": neg_out}, _scope(dataset, start, end))
+
+
+def chain_profile(dataset: str, chain_id: Optional[str] = None, templates: Optional[list] = None,
+                  context_minutes: int = 60, top: int = 10):
+    """First-class profile of one chain event: frequency, trend, episode dates, proposed order and ±context.
+    The chain must be a CONFIRMED one from correlation_chains (same bundle repeated >= 2 days)."""
+    ev = Evidence("chain_profile", {"dataset": dataset, "chain_id": chain_id, "templates": templates})
+    inner = correlation_chains(dataset)
+    ev.queries.extend(inner["queries"])
+    all_chains = inner["data"]["confirmed_chains"]
+    if templates:
+        want = sorted(templates)
+        match = [c for c in all_chains if sorted(t["template_id"] for t in c["templates"]) == want]
+    elif chain_id:
+        match = [c for c in all_chains if c["chain_id"] == chain_id]
+    else:
+        raise ValueError("pass chain_id or templates")
+    if not match:
+        raise ValueError("chain not found among confirmed chains (it may not have repeated yet) — call correlation_chains")
+    ch = match[0]
+    tids = [t["template_id"] for t in ch["templates"]]
+    where, params = _filters(dataset=dataset)
+    ph = ", ".join(["%s"] * len(tids))
+    episodes = ev.run(
+        "Per-episode per-template first line and volume",
+        f"SELECT CAST(ts AS DATE) AS day, template_id, count(*) AS lines, min(ts) AS first_ts "
+        f"FROM events_v WHERE {where} AND template_id IN ({ph}) "
+        f"AND CAST(ts AS DATE) IN ({', '.join(['%s'] * len(ch['episode_dates'][:top]))}) "
+        f"GROUP BY 1, 2 ORDER BY 1, 3 DESC",
+        (*params, *tids, *ch["episode_dates"][:top]))
+    first_day = ch["episode_dates"][0] if ch["episode_dates"] else None
+    ctx_min = int(context_minutes)
+    context = ev.run(
+        f"±{ctx_min} min around the first episode (all levels)",
+        f"SELECT line_id, ts, level, component, source, template_id, content FROM events_v "
+        f"WHERE dataset = %s AND CAST(ts AS DATE) = %s "
+        f"AND ts >= (SELECT min(ts) FROM events_v WHERE dataset = %s AND CAST(ts AS DATE) = %s) - INTERVAL '{ctx_min}' MINUTE "
+        f"AND ts <= (SELECT max(ts) FROM events_v WHERE dataset = %s AND CAST(ts AS DATE) = %s) + INTERVAL '{ctx_min}' MINUTE "
+        f"ORDER BY ts LIMIT 60",
+        (dataset, first_day, dataset, first_day, dataset, first_day))
+    ev.notes += ["The chain is treated as ONE repeated event; all its templates share the same episodes.",
+                 "order_proposal is derived from timestamps (earliest average first line per episode) — sequencing proposal, not causation.",
+                 "Context is a sample from the first episode only (up to 60 lines).",
+                 LINES_NOT_INCIDENTS]
+    return ev.result({"chain_id": ch["chain_id"], "size": ch["size"], "templates": ch["templates"],
+                      "order_proposal": ch["order_proposal"], "frequency": {"episodes": ch["episodes"],
+                      "episode_dates": ch["episode_dates"][:top],
+                      "trend_first_half_lines": ch["trend_first_half_lines"],
+                      "trend_second_half_lines": ch["trend_second_half_lines"]},
+                      "episodes_detail": episodes, "context_sample": context},
+                     f"{dataset}, chain {ch['chain_id']} ({ch['size']} templates)")
+
+
 # ------------------------------------------------------------- tool registry
 
 _DATASET = {"type": "string", "enum": list(DATASETS), "description": "bgl or openstack. Omit for both."}
@@ -895,6 +1080,29 @@ TOOLS = {
                        "top": {"type": "integer", "description": "Maximum pairs returned (1-100, default 20)."},
                        "min_active_days": {"type": "integer", "description": "Ignore templates active on fewer days (default 5)."},
                        "min_lines": {"type": "integer", "description": "Ignore templates with fewer total lines (default 50)."}},
+        "required": ["dataset"]}),
+    "correlation_chains": (correlation_chains, {
+        "description": "Candidate event CHAINS from strict (+1/-1) daily correlations. A chain is CONFIRMED only when the same "
+                       "template bundle repeats on >= min_repeats distinct days; single-day coincidences stay candidates. Negative "
+                       "pairs (mutual exclusion) are listed separately as regime indicators. Each chain has a timestamp-based "
+                       "order_proposal (sequencing hint, NOT causation). Use after correlate_templates for root-cause grouping. "
+                       "Returns {confirmed_chains, candidate_chains, negative_pairs}.",
+        "properties": {"dataset": _DATASET, "start": _START, "end": _END,
+                       "min_r": {"type": "number", "description": "Strict correlation threshold (default 0.999 ~ +/-1)."},
+                       "min_repeats": {"type": "integer", "description": "Distinct days the bundle must repeat to be confirmed (default 2)."},
+                       "top": {"type": "integer", "description": "Maximum chains returned (1-50, default 20)."}},
+        "required": ["dataset"]}),
+    "chain_profile": (chain_profile, {
+        "description": "First-class profile of one CONFIRMED chain (from correlation_chains): frequency (episodes), episode dates, "
+                       "first-half vs second-half trend, the proposed chain order and a +/-60 min context sample around the first "
+                       "episode. The chain is treated as ONE repeated event with its own attributes. Returns {chain_id, templates, "
+                       "order_proposal, frequency, episodes_detail, context_sample}.",
+        "properties": {"dataset": _DATASET,
+                       "chain_id": {"type": "string", "description": "Chain id from correlation_chains, e.g. 'CH-1a2b3c4d'. Pass this OR templates."},
+                       "templates": {"type": "array", "items": {"type": "string"},
+                                     "description": "Alternative to chain_id: exact template_id list of the chain."},
+                       "context_minutes": {"type": "integer", "description": "Context window around the first episode (default 60)."},
+                       "top": {"type": "integer", "description": "Maximum episodes returned (1-30, default 10)."}},
         "required": ["dataset"]}),
 }
 
