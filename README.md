@@ -178,6 +178,24 @@ You're set up. Now [choose how to use it](#2-choose-how-to-use-it).
 
 ---
 
+## 1.9 One-command Docker setup (any OS)
+
+If you have Docker, the whole stack — SereneDB, data download/parse/load, web UI and the MCP server — starts with:
+
+```bash
+cp .env.example .env        # add your model key (the only manual step)
+docker compose up --build
+```
+
+Then:
+- Web UI: http://localhost:8000
+- First run takes ~10 minutes (770 MB download + parse + load) — watch progress with `docker compose logs -f init`;
+  later runs reuse the `serenedb-data` volume and the parsed CSVs in `./data`.
+- MCP over HTTP (works from any machine, no clone needed): add a **remote** MCP server with URL
+  `http://<this-machine>:8001/mcp`, e.g. on the same machine:
+  `claude mcp add --transport http logiq http://localhost:8001/mcp`
+- Stop: `docker compose down` (keeps data). Fresh start: `docker compose down -v`.
+
 ## 2. Choose how to use it
 
 All three ways use the same 19 tools and the same data:

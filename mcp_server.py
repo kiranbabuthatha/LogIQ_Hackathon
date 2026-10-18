@@ -9,6 +9,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 import agent
+import os
+
 import tools
 
 INSTRUCTIONS = """LogIQ answers questions about BGL and OpenStack logs stored in SereneDB, for three roles:
@@ -19,6 +21,7 @@ In the narrative, interpret results only: never mention tool names, tool inputs 
 plumbing. Structure every answer in tiers: '## Level 0 summary' first (one or two sentences, the whole result compressed, no plumbing, only the essential numbers), then '## Level 1 summary' (a short paragraph with the key findings, measured numbers and the main recommendation), then the detailed role sections, and finally the '## Show your work' appendix listing each query used: tool name, inputs, the SQL that
 ran, rows returned and whether truncated, each tagged with its evidence id. All plumbing lives only in that appendix."""
 
+MCP_TRANSPORT = os.environ.get("LOGIQ_MCP_TRANSPORT", "stdio")
 server = MCPServer(name="logiq", instructions=INSTRUCTIONS)
 
 
@@ -61,4 +64,9 @@ for role, spec in agent.ROLES.items():
                               f"evidence rules. Example: {spec['examples'][0]}")(_role_prompt(role))
 
 if __name__ == "__main__":
-    server.run()
+    if MCP_TRANSPORT == "streamable-http":
+        server.run(transport=MCP_TRANSPORT,
+                   host=os.environ.get("LOGIQ_MCP_HOST", "0.0.0.0"),
+                   port=int(os.environ.get("LOGIQ_MCP_PORT", "8001")))
+    else:
+        server.run(transport=MCP_TRANSPORT)

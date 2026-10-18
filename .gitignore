@@ -12,6 +12,10 @@
 !mcp_server.py
 !worked_investigation.py
 !agent_tools.py
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
+!mcp_server.py
 !load.py
 !prepare_data.py
 !sql/
