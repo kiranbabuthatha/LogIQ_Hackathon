@@ -5,6 +5,10 @@ The database searches and counts; the AI explains the evidence. Every number cit
 
 **Prerequisite:** Docker. *(Everything else is automatic.)*
 
+**How it works:** your question → the agent picks from 19 tools → parameterised SQL runs in
+SereneDB over the BGL + OpenStack corpus (≈5M lines) → limited evidence returns → the agent
+answers in your role's language, citing the exact query behind every number.
+
 ## Run it (3 commands)
 
 ```bash
@@ -52,6 +56,15 @@ docker compose down -v     # stop + wipe (next run reloads automatically)
 | Linux / WSL | `fuser -k 8001/tcp` |
 | macOS | `lsof -ti:8001 \| xargs kill -9` |
 | Windows (PowerShell) | `Get-NetTCPConnection -LocalPort 8001 -State Listen \| % { Stop-Process -Id $_.OwningProcess -Force }` |
+
+## Known limitations
+
+- Log-line counts are **not** incident counts (the incident-counting tool approximates by time buckets).
+- The bundled datasets cover different eras and spans (BGL: 214 days in 2005; OpenStack: 3 days in 2017) —
+  cross-dataset comparisons are limited, and short windows weaken correlation analysis.
+- Template IDs are assigned by this project's parser (first-appearance order), not Loghub's official catalog.
+- The logs contain **no downtime, cost or user-impact data** — priorities are severity × frequency × trend only.
+- The web UI keeps conversations in memory; a restart clears them.
 
 ---
 
