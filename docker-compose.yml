@@ -5,6 +5,8 @@ services:
   serenedb:
     image: serenedb/serenedb:26.09.2
     ports: ["7890:7890"]
+    environment:
+      POSTGRES_PASSWORD: logiq-dev-password
     volumes:
       - serenedb-data:/var/lib/serenedb
       - ./data:/data
@@ -19,7 +21,7 @@ services:
     environment:
       BGL_SOURCE: /data/BGL.log_structured.csv
       OPENSTACK_SOURCE: /data/OpenStack.log_structured.csv
-      SERENEDB_DSN: postgresql://postgres@serenedb:7890/postgres
+      SERENEDB_DSN: postgresql://postgres:logiq-dev-password@serenedb:7890/postgres
     command: >
       sh -c "pip install --no-cache-dir -r requirements.txt &&
              if [ -z \"$$ANTHROPIC_API_KEY\" ] && [ -z \"$$NVIDIA_API_KEY\" ] && [ -z \"$$LOGIQ_API_KEY\" ]; then
@@ -38,7 +40,7 @@ services:
       - path: .env
         required: false
     environment:
-      SERENEDB_DSN: postgresql://postgres@serenedb:7890/postgres
+      SERENEDB_DSN: postgresql://postgres:logiq-dev-password@serenedb:7890/postgres
     command: uvicorn app:app --host 0.0.0.0 --port 8000
     depends_on: [init]
 
@@ -51,7 +53,7 @@ services:
       - path: .env
         required: false
     environment:
-      SERENEDB_DSN: postgresql://postgres@serenedb:7890/postgres
+      SERENEDB_DSN: postgresql://postgres:logiq-dev-password@serenedb:7890/postgres
       LOGIQ_MCP_TRANSPORT: streamable-http
       LOGIQ_MCP_HOST: 0.0.0.0
       LOGIQ_MCP_PORT: "8001"
